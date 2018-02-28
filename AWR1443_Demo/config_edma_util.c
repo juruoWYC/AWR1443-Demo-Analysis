@@ -1,4 +1,4 @@
-#include <xdc/runtime/System.h>
+#include <xdc/runtime/System.h>   //SYS/BIOS头文件
 #include <ti/drivers/edma/edma.h> //EDMA底层驱动程序
 #include "config_edma_util.h"     //本模块头文件
 #include "mmw.h"                  //主头文件
