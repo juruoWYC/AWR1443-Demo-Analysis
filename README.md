@@ -1,5 +1,5 @@
-#AWR1443 mmWave Demo 源代码解析与中文注释
-##主要文件说明
+# AWR1443 mmWave Demo 源代码解析与中文注释
+## 主要文件说明
 * main.c
     *  mmWave Demo主程序
 * mmw.h
