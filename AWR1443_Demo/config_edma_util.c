@@ -137,7 +137,7 @@ exit:
  * chainChId                         Chain Channel Id, chId will be chained to this.
  * pSrcAddress                       源地址指针
  * pDestAddress                      目标地址指针
- * numAnt                            接收天线编号
+ * numAnt                            接收天线数量
  * numRangeBins                      1D-FFT点数
  * numChirpsPerFrame                 每帧的啁啾数
  * isIntermediateChainingEnabled     Set to 'true' if intermediate transfer chaining is to be enabled.
