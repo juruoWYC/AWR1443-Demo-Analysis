@@ -4,7 +4,7 @@
     *  mmWave Demo主程序
 * mmw.h
     *  mmWave Demo主头文件，包含所有需要的头文件，定义重要功能函数、结构体
-*data_path.c
+* data_path.c
     *  数据处理路径主程序，包含对ADC数据的收集，1D-FFT及2D-FFT处理
 * config_edma_util.c
     * 实现配置EDMA功能的API函数
