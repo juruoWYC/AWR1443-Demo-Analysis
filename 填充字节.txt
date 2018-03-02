@@ -1,0 +1,8 @@
+/* ·¢ËÍÌî³ä×Ö½Ú */
+    numPaddingBytes = MMWDEMO_OUTPUT_MSG_SEGMENT_LEN - (packetLen & (MMWDEMO_OUTPUT_MSG_SEGMENT_LEN-1));
+    if (numPaddingBytes<MMWDEMO_OUTPUT_MSG_SEGMENT_LEN)
+    {
+        UART_writePolling (uartHandle,
+                            (uint8_t*)padding,
+                            numPaddingBytes);
+    }
