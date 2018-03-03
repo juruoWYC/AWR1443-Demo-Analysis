@@ -1,622 +1,3 @@
-/**
- *   @file  main.c
- *
- *   @brief
- *      This is the main file which implements the millimeter wave Demo
- *
- *  \par
- *  NOTE:
- *      (C) Copyright 2016 Texas Instruments, Inc.
- *
- *  Redistribution and use in source and binary forms, with or without
- *  modification, are permitted provided that the following conditions
- *  are met:
- *
- *    Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- *    Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the
- *    distribution.
- *
- *    Neither the name of Texas Instruments Incorporated nor the names of
- *    its contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-/** @mainpage Millimeter Wave (mmw) Demo
- *
- *  @section intro_sec Introduction
- *
- *  @image html toplevel.png
- *
- *  The millimeter wave demo shows some of the capabilities of the XWR14xx SoC
- *  using the drivers in the mmWave SDK (Software Development Kit).
- *  It allows user to specify the chirping profile and displays the detected
- *  objects and other information in real-time.
- *
- *  Following is a high level description of the features of this demo:
- *  - Be able to specify desired chirping profile through command line interface (CLI)
- *    on a UART port or through the TI Gallery App - **mmWave Demo Visualizer** -
- *    that allows user to provide a variety of profile configurations via the UART input port
- *    and displays the streamed detected output from another UART port in real-time,
- *    as seen in picture above.
- *  - Some sample profile configurations have been provided in the demo directory that can be
- *    used with CLI directly or via **mmWave Demo Visualizer**:
- *    @verbatim
-        mmw/profiles/profile_2d.cfg
-        mmw/profiles/profile_3d.cfg
-        mmw/profiles/profile_heat_map.cfg
-      @endverbatim
- *  - Do 1D, 2D, CFAR, Azimuth and Elevation processing and stream out velocity
- *    and three spatial coordinates (x,y,z) of the detected objects in real-time.
- *    The demo can also be configured to do 2D only detection (velocity and x,y coordinates).
- *  - Various display options besides object detection like azimuth heat map and
- *    Doppler-range heat map.
- *  - Illustrates how to configure the various hardware entities (Hardware accelerator (HWA),
- *    EDMA, UART) in the AR SoC using the driver software.
- *
- *  @section limit Limitations
- *  - Because of UART speed limit (< 1 Mbps), the frame time is more restrictive.
- *    For example, for the azimuth and Doppler heat maps for 256 FFT range and
- *    16 point FFT Doppler, it takes about 200 ms to transmit.
- *  - Present implementation in this demo cannot resolve objects at the same range and velocity
- *    but at different azimuth and/or elevation. The algorithms may be improved in future
- *    versions to solve this.
- *  - Code will give an error if the requested memory in L3 RAM exceeds its size (@ref SOC_XWR14XX_MSS_L3RAM_SIZE) due to
- *    particular combination  of CLI configuration parameters.
- *  - For most boards, a range bias of few centimeters has been observed. User can estimate
- *    the range bias on their board and correct using the calibration procedure
- *    described in @ref calibration.
- *  - For the scheme @ref DATA_PATH_CHAIN_COMBINED_LOGMAG, the azimuth static
- *    heat map (Doppler 0 range bins) is computed on the 1D FFT output instead
- *    of the required 2D FFT output because of which the heat map will get affected
- *    by motion in the scene. This will be corrected in a future release.
- *
- *  @section tasks Software Tasks
- *    The demo consists of the following (SYSBIOS) tasks:
- *    - @ref MmwDemo_initTask. This task is created/launched by @ref main and is a
- *      one-time active task that performs the following sequence:
- *      -# Initializes drivers (\<driver\>_init).
- *      -# Initializes the MMWave module (MMWave_init)
- *      -# Creates/launches following three tasks (the @ref CLI_task is launched indirectly by
- *          calling @ref CLI_open).
- *    - @ref CLI_task. This command line interface task provides a simplified 'shell' interface
- *      which allows the configuration of the BSS via the mmWave interface (MMWave_config).
- *      It parses input CLI configuration commands like chirp profile and GUI configuration.
- *      When sensor start CLI command is parsed, it sends @ref MMWDEMO_CLI_SENSORSTART_EVT to
- *      @ref MmwDemo_sensorMgmtTask task and then waits for @ref MMWDEMO_START_COMPLETED_EVT before
- *      accepting new commands over the CLI/UART.
- *      When sensor stop CLI command is parsed, it sends @ref MMWDEMO_CLI_SENSORSTOP_EVT to
- *      @ref MmwDemo_sensorMgmtTask task and then waits for @ref MMWDEMO_STOP_COMPLETED_EVT before
- *      accepting new commands over the CLI/UART.
- *    - @ref MmwDemo_sensorMgmtTask. This task accepts sensor start and stop commands either via
- *      CLI or GPIO buttons on the EVMs. It performs the following steps on receiving the start and stop
- *      commands:
- *          - MMWDEMO_CLI_SENSORSTART_EVT:
- *              -# Issues MMWave_config using the
- *              previously parsed configurations to setup the BSS.
- *              -# Configures the only-once (@ref MmwDemo_dataPathConfigCommon) and
- *              first-time (@ref MmwDemo_config1D_HWA, @ref MmwDemo_dataPathTrigger1D)
- *              data path processing configurations, so that the processing chain is ready
- *              to do the first step of 1D processing related to chirps (see @ref datapath).
- *              -# Issues MMWave_start to command the BSS to start chirping.
- *              -# Switches on the @ref SOC_XWR14XX_GPIO_2 LED on EVM
- *              -# Signals the @ref MMWDEMO_START_COMPLETED_EVT event to CLI task. <br>
- *          - MMWDEMO_CLI_SENSORSTOP_EVT:
- *              -# Issues MMWave_stop to stop the BSS and the chirping
- *              -# Switches off the @ref SOC_XWR14XX_GPIO_2 LED on EVM
- *              -# Signals the @ref MMWDEMO_STOP_COMPLETED_EVT event to CLI task.
- *    - @ref MmwDemo_mmWaveCtrlTask. This task is used to provide an execution
- *      context for the mmWave control, it calls in an endless loop the MMWave_execute API.
- *    - @ref MmwDemo_dataPathTask. The task performs in real-time:
- *      - Data path processing chain control and (re-)configuration
- *        of the hardware entities involved in the processing chain, namely HWA and EDMA.
- *      - Transmits the detected objects etc through the UART output port.
- *        For format of the data on UART output port, see @ref MmwDemo_transmitProcessedOutput.
- *        The UART transmission is done in the data path processing task
- *        itself although it could be done in a separate thread to potentially parallelize
- *        data path processing with transmission on UART. Presently, the UART processing
- *        is dominant because of slow UART speed and data path processing time on R4F CPU
- *        is not much (about 2 ms, most work done by HWA) hence this is not a problem.
- *        Separation of the transmit task may be done in future versions of the demo.
- *
- *  @section datapath Data Path - Overall
- *   @image html datapath_overall.png "Top Level Data Path Processing Chain"
- *   \n
- *   \n
- *   @image html datapath_overall_timing.png "Top Level Data Path Timing"
- *
- *   As seen in the above picture, the data path processing consists of:
- *   - Processing during the chirps as seen in the timing diagram:
- *     - This consists of 1D (range) FFT processing that takes input from multiple
- *     receive antennae from the ADC buffer for every chirp (corresponding to the
- *     chirping pattern on the transmit antennae)
- *     and performs FFT on it and generates transposed output into the L3 RAM.
- *     This is done using HWA and EDMA, more details of which can be seen in @ref data1d
- *   - Processing during the idle or cool down period of the RF circuitry following the chirps
- *     until the next chirping period, shown as "Inter frame processing time" in the timing diagram.
- *     This processing consists of:
- *     - 2D (velocity) FFT processing that takes input from 1D output in L3 RAM and performs
- *       FFT to give a (range,velocity) matrix in the L3 RAM. This is done using HWA and EDMA,
- *       more details of which can bbe seen in @ref data2d
- *     - CFAR detection using HWA. More details can be seen at @ref dataCFAR.
- *     - Post processing using R4F. More details can be seen at @ref dataPostProc
- *     - Direction of Arrival Estimation (Azimuth, Elevation). More details can be seen at
- *       @ref dataAngElev_low, @ref dataAngElev_high and @ref dataXYZ
- *
- *  @subsection antConfig Antenna Configurations
- *  The following figure shows antenna layout as seen from the front of
- *  the EVM xWR14xx board alongside the x,y,z coordinate convention.
- *   @image html antenna_design.png "xWR14xx Antenna layout"
- *
- *   As seen in figures below, the millimeter wave demo supports two antenna configurations:
- *     - Two transmit antennas and four receive antennas. Transmit antennas Tx1 and Tx3
- *       are horizontally spaced at d = 2 Lambda, with their transmissions interleaved in
- *       a frame. This configuration allows for azimuth estimation.
- *     - Three  transmit and four receive antennas . The third Tx antenna, Tx2, is
- *       positioned between the other two Tx antennas at half lambda elevation. This
- *       configuration allows for both azimuth and elevation estimation.
- *   \n
- *   @image html antenna_layout_2D.png "Antenna Configuration 2D (azimuth estimation)"
- *   \n
- *   @image html antenna_layout_3D.png "Antenna Configuration 3D (azimuth and elevation estimation)"
- *   \n
- *
- *   @subsection data1d Data Path - 1st Dimension FFT Processing
- *   @image html datapath_1d_elevation.png "Data Path 1D"
- *   \n
- *   @image html datapath_1d_timing.png "Data Path 1D timing diagram"
- *
- *   Above pictures illustrate a case of 3 *16 = 48 chips per frame and 225 samples per receive antenna per
- *   chirp with three transmit antennas as mentioned in @ref antConfig, chirping within the frame with
- *   repeating pattern of (Tx1,Tx3,Tx2).
- *   This is the 3D profile (velocity and x,y,z) case. There are 4 rx
- *   antennas, the samples of which are color-coded and labeled as 1,2,3,4 with
- *   unique coloring for each of chirps that are processed in ping-pong manner
- *   to parallelize accelerator and EDMA processing with sample acquisition from ADC.
- *   The hardware accelerator's parameter RAMs are setup to do 256 point FFTs
- *   which operates on the input ADC ping and pong buffers to produce output in M2 and M3
- *   memories of the HWA.
- *   Initially the software triggers (@ref MmwDemo_dataPathTrigger1D) the processing by activating HWA's dummy
- *   params PARAM_0 (ping) and PARAM_2 (pong) which in turn activate the processing PARAMs
- *   PARAM_1 (ping) and PARAM_3 (pong) which are waiting on the ADC full signal.
- *   When ADC has samples to process in the ADC buffer Ping or Pong memories, the corresponding
- *   processing PARAM will trigger FFT calculation and transfer the FFT output into the M2 or M3 memories.
- *   Before ADC samples are sent to FFT engine, a Blackman window is applied to them in the HWA.
- *   The completion of FFT also triggers EDMA which has been setup to do a copy with
- *   transposition from the M2/M3 memories to the L3 RAM (Radar Cube Matrix, @ref
- *   MmwDemo_DataPathObj::radarCube)
- *   as shown in the picture.
- *   This HWA-EDMA ping-pong processing is done 48/2(ping/pong) = 24 times so
- *   that all chirps of the frame are processed. The EDMA
- *   is setup so that after processing every chirp, the EDMA B or EDMA D which are
- *   chained from EDMA A and EDMA C channels will trigger the HWA's dummy PARAMs.
- *   The EDMA C in the picture is setup to give a completion interrupt after the last chirp
- *   which notifies software that 1D processing is complete and software can trigger
- *   1D processing again for the next chirping period when the time comes.
- *   The shadow (link) PaRAMs of EDMA are used for reloading the PaRAMs so reprogramming
- *   is avoided. The blue arrows between EDMA blocks indicate linking and red arrows
- *   indicate chaining.
- *
- *   In the above pictures:
- *   - A is @ref MMW_EDMA_1D_PING_CH_ID
- *   - B is @ref MMW_EDMA_1D_PING_CHAIN_CH_ID
- *   - A_shadow is @ref MMW_EDMA_1D_PING_SHADOW_LINK_CH_ID
- *   - B_shadow is @ref MMW_EDMA_1D_PING_ONE_HOT_SHADOW_LINK_CH_ID
- *   - C is @ref MMW_EDMA_1D_PONG_CH_ID,
- *   - D is @ref MMW_EDMA_1D_PONG_CHAIN_CH_ID
- *   - C_shadow is @ref MMW_EDMA_1D_PONG_SHADOW_LINK_CH_ID
- *   - D_shadow is @ref MMW_EDMA_1D_PONG_ONE_HOT_SHADOW_LINK_CH_ID
- *
- *  @subsection data2d Data Path - Lower Precision 2nd Dimension Processing
- *   @image html datapath_2d_top_level.png "Data Path 2D FFT high level diagram"
- *   \n
- *   \n
- *   @image html datapath_2d_timing.png "Data Path 2D FFT timing diagram"
- *
- *
- *   As shown in the high level diagram above, the 2D processing performs
- *   a 2nd dimension (Doppler) FFT on the range data from 1D output, the processing is
- *   done in a ping-pong manner. It consists of the following steps:
- *   -# Static clutter removal if enabled. For each range bin, per each antenna, the mean value of
- *   the samples is calculated and subtracted from the samples. The operation is
- *   performed by R4F directly on data in L3.
- *   -# The data from the L3 RAM (@ref MmwDemo_DataPathObj::radarCube) is transferred by EDMA into
- *   the M0 (even pair or ping) and M1 (odd pair or pong) memories of the HWA which then
- *   performs the 2D-FFT and produces the output in M2 and M3 memories. Before FFT operation,
- *   input samples are multiplied by a window function.
- *   -# The HWA performs log magnitude operation on M2 and M3 memories from above step
- *   and produces results in M0 and M1.
- *   -# The HWA performs the sum operation on the M0 and M1 memories from above step
- *   and produces results in the M2 and M3 memories appended to results from step 1.
- *   -# The EDMA copies the results from step 1 to the L3 RAM at
- *    @ref MmwDemo_DataPathObj::radarCube (in the same place as the input in step 1)
- *    and then the EDMA copies the
- *    results from the previous step to the
- *    L3 RAM at @ref MmwDemo_DataPathObj::rangeDopplerLogMagMatrix.
- *
- *   The data is transferred and processed in chunks of @ref MMW_NUM_RANGE_BINS_PER_TRANSFER rows.
- *   The timing of ping-pong parallelism is shown in the timing diagram above. For more details
- *   of the data flow like the format of data in the memories between stages,
- *   the EDMA and HWA resources, etc, refer to the detailed diagram below.
- *   @image html datapath_2d_detailed_elevation.png "Data Path 2D FFT  detailed diagram"
- *
- *   In the detailed diagram:
- *   - A is @ref MMW_EDMA_2D_PING_CHAIN_CH_ID2,
- *   - B is @ref MMW_EDMA_2D_PING_CHAIN_CH_ID3
- *   - A_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID3
- *   - B_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID4
- *   - C is @ref MMW_EDMA_2D_PONG_CHAIN_CH_ID2,
- *   - D is @ref MMW_EDMA_2D_PONG_CHAIN_CH_ID3
- *   - C_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID3
- *   - D_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID4
- *   - E is @ref MMW_EDMA_2D_PING_CH_ID,
- *   - F is @ref MMW_EDMA_2D_PING_CHAIN_CH_ID1 (chained to A)
- *   - E_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID1
- *   - F_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID2
- *   - G is @ref MMW_EDMA_2D_PONG_CH_ID,
- *   - H is @ref MMW_EDMA_2D_PONG_CHAIN_CH_ID1 (chained to C)
- *   - G_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID1
- *   - H_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID2
- *
- *   The 2D processing is triggered by software by starting EDMA A and EDMA C.
- *   (@ref MmwDemo_dataPathTrigger2D).
- *   \n
- *   \n
- *
- *  @subsection data2dCombined2DandLogMag Data Path - Higher precision 2nd Dimension Processing
- *   In the data path processing described above (@ref data2d), the FFT output is of
- *   24-bit precision but is converted to 16-bit for storage in radar Cube and this 16-bit is also used for
- *   log2 processing. Reason for this scheme is limited storage space in radar cube. However, this loss of
- *   precision results in spiky noise profile which increases false detections in CFAR. One way to solve
- *   this problem would be to store output of FFT in the M memory as 32-bit instead of 16-bit before log2 operation.
- *   However, this requires storage (in bytes) = 3 (num tx antennas) * 4 (num rx antennas) * 8 (complex 32-bit) * Doppler FFT size.
- *   This must fit in the 16 KB size for each of the four M memories, which limits the Doppler FFT size to 512, but
- *   we support up to 1024. Hence we have to choose the option in HWA to chain the FFT and log magnitude directly without
- *   going to M memory, this retains the 24-bit precision. However this comes at the cost of recomputing the 2D
- *   FFT during DOA calculation. So it is a trade-off between precision and MIPS. By default, this
- *   higher precision scheme is selected but user can change to the lower precision scheme
- *   by changing the following line of code in main.c to set the left hand side variable
- *   to @ref DATA_PATH_CHAIN_SEPARATE_LOGMAG.
- *   @verbatim
-       gMmwMCB.dataPathObj.datapathChainSel = DATA_PATH_CHAIN_COMBINED_LOGMAG;
-     @endverbatim
- *
- *   The following diagram shows the modified data Path 2D FFT.
- *   Since 2D FFT output is not stored in Radar Cube, the Radar Cube still contains 1D FFT data.
- *
- *   @image html datapath_2d_detailed_combinedFFTandLogMagnitude.png "Data Path 2D FFT  detailed diagram - combined 2D FFT and Log-Magnitude"
- *
- *
- *   In the detailed diagram:
- *   - A is @ref MMW_EDMA_2D_PING_CHAIN_CH_ID2,
- *   - B is @ref MMW_EDMA_2D_PING_CHAIN_CH_ID3
- *   - A_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID3
- *   - B_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID4
- *   - C is @ref MMW_EDMA_2D_PONG_CHAIN_CH_ID2,
- *   - D is @ref MMW_EDMA_2D_PONG_CHAIN_CH_ID3
- *   - C_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID3
- *   - D_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID4
- *   - E is @ref MMW_EDMA_2D_PING_CH_ID (chained to A),
- *   - E_shadow is @ref MMW_EDMA_2D_PING_SHADOW_LINK_CH_ID1
- *   - G is @ref MMW_EDMA_2D_PONG_CH_ID (chained to C),
- *   - G_shadow is @ref MMW_EDMA_2D_PONG_SHADOW_LINK_CH_ID1
- *
- *   The 2D processing is triggered by software by starting EDMA A and EDMA C.
- *   (@ref MmwDemo_dataPathTrigger2D).
- *   \n
- *   \n
- *   
- *  @subsection dataCFAR Data Path - CFAR Detection
- *   @image html datapath_cfar.png "Data Path CFAR Detection Diagram"
- *   \n
- *  As shown in the above picture, CFAR processing consists of:
- *  -# The software triggers (@ref MmwDemo_dataPathTriggerCFAR)
- *     the EDMA that transfers the range-doppler log magnitude matrix from L3 RAM
- *     @ref MmwDemo_DataPathObj::rangeDopplerLogMagMatrix (output of 2D processing)
- *     to the M0 memory.
- *  -# The HWA performs CFAR computation in M0 and produces output in M2 memory and
- *     a CFAR completion interrupt from HWA is generated to the R4F CPU.
- *
- *  In the above picture:
- *  - A is @ref MMW_EDMA_CFAR_INP_CH_ID
- *  - B is @ref MMW_EDMA_CFAR_INP_CHAIN_CH_ID
- *  - A_Shadow is @ref MMW_EDMA_CFAR_INP_SHADOW_LINK_CH_ID1
- *  - B_Shadow is @ref MMW_EDMA_CFAR_INP_SHADOW_LINK_CH_ID2
- *
- * The following are default CFAR configuration parameters:
- *  - @ref MMW_HWA_NOISE_AVG_MODE
- *  - @ref MMW_HWA_CFAR_THRESHOLD_SCALE
- *  - @ref MMW_HWA_CFAR_WINDOW_LEN
- *  - @ref MMW_HWA_CFAR_GUARD_LEN
- *  - @ref MMW_HWA_CFAR_NOISE_DIVISION_RIGHT_SHIFT
- *  - @ref MMW_HWA_CFAR_PEAK_GROUPING
- *
- * These parameters can be changed using a cli configuration command cfarCfg.
- * The command with the arguments are described below:
- *
- * cfarCfg \<averageMode\> \<winLen\> \<guardLen\> \<noiseDiv\> \<cyclicMode\> \<peakGrouping\> \<thresholdScale\>
- *
- * where
- *  - \<averageMode\>     - 0-CFAR_CA, 1-CFAR_CAGO, 2-CFAR_CASO
- *  - \<winLen\>          - CFAR Noise averaging window length
- *  - \<guardLen\>        - CFAR guard length
- *  - \<noiseDiv\>        - CFAR noise averaging divisor (right shift value)
- *  - \<cyclicMode\>      - 0-cyclic mode disabled, 1-cyclic mode enabled
- *  - \<peakGrouping\>    - 0-peak grouping disabled, 1-peak grouping enabled
- *  - \<thresholdScale\>  - Detection scale factor
- *
- *  @subsection dataPostProc Data Path - Post processing
- *    Post processing includes peak grouping and Doppler phase shift compensation.
- *
- *    Peak grouping function  (@ref MmwDemo_peakGrouping) is done by the R4F CPU after CFAR processing.
- *    Its inputs are:
- *    - List of detected objects by CFAR Detection from the 2D output in M2.
- *      Each detected object is described by three parameters: range index, Doppler index, and noise
- *      energy in CFAR cell, as seen in @ref cfarDetOutput_t.
- *    - Radar cubed matrix, located in L3 memory (@ref MmwDemo_DataPathObj::radarCube).
- *    - Log magnitude range Doppler matrix in L3 memory (@ref MmwDemo_DataPathObj::rangeDopplerLogMagMatrix).
- *
- *    The function performs the following:
- *    -# Discards detected objects with range indices outside of the range specified by peakGrouping CLI command.
- *    -# Discards detected objects whose FFT peaks in the range-doppler matrix
- *     (@ref MmwDemo_DataPathObj::rangeDopplerLogMagMatrix) are smaller than its neighbors.
- *    -# For each selected object, copies the 2nd Dimensional FFT complex values of received virtual antennas
- *      located in @ref MmwDemo_DataPathObj::radarCube to M0 (azimuth antennas) and M1 (elevation antennas)
- *      for further azimuth and elevation FFT calculation.
- *    -# For each selected object, copies its (range, Doppler) indices to R4F CPU's local memory
- *       @ref MmwDemo_DataPathObj::objOut, which will be eventually shipped out after the azimuth
- *       and x,y,z calculations are done (refer to @ref dataXYZ).
- *
- *    Doppler compensation function  (@ref MmwDemo_dopplerCompensation) is done by the R4F CPU after CFAR and peak grouping processing.
- *
- *    Its inputs are separate Azimuth and Elevation symbol arrays.
- *
- *    It performs compensation for the Doppler phase shift on the symbols corresponding to the virtual Rx antennas. In case of 2Tx MIMO scheme, the second set of Rx symbols
- *       is rotated by half of the estimated Doppler phase shift between subsequent chirps corresponding to the same Tx antenna. In case of 3Tx MIMO elevation scheme, the second set
- *       of Rx symbols is rotated by third of the estimated Doppler phase shift, while the third set of Rx symbols corresponding to the third Tx antenna is rotated by 2/3 of the estimated Doppler phase shift.
- *       Refer to the pictures below.
- *    @anchor Figure_doppler
- *    @image html angle_doppler_compensation.png "Figure_doppler: Doppler Compensation"
- *
- *   At the end, the function returns the number of selected objects.
- *
- *  @subsection dataAngElev_low Data Path - Direction of Arrival FFT Calculation corresponding to Lower Precision 2D Processing
- *    @image html datapath_azimuth_fft.png
- *
- *    Azimuth/elevation FFT computation is triggered by the software (@ref MmwDemo_dataPathTriggerAngleEstimation)
- *    if the number of detected  peaks after the post processing stage is greater than zero. For each
- *    detected object in M0 (azimuth antennas) and M1 (elevation antennas), it performs the following steps:
- *    -# Complex FFT of the array of elevation antennas from M1 to M3.
- *    -# Complex FFT of the array of azimuth antennas from M0 to M2.
- *    -# Log magnitude FFT of the array azimuth antennas from M0 to M1 (over-writes the input of step 1). This step
- *       is performed for the purpose of finding the peak. The position of the peak is used to look-up the output of
- *       calculations in above two steps to obtain the azimuth and elevation peak points which are referred in
- *       @ref dataXYZ as \f$P_1\f$ and \f$P_2\f$ respectively.
- *
- *    Currently the size of FFT is hardcoded and defined by @ref MMW_NUM_ANGLE_BINS.
- *    If the number of Tx elevation antennas is equal to zero (no elevation), only step 2 above is done.
- *
- *  @subsection dataAngElev_high Data Path - Direction of Arrival FFT Calculation corresponding to Higher Precision 2D Processing
- *
- *    @image html datapath_alternative.png
- *
- *    For higher precision 2D processing, recall that in 2D FFT phase, \n
- *        - HWA calculates log Magnitude together with 2D FFT without output formating
- *          into 16 bits data to preserve resolution for CFAR detection.
- *        - It saves only rangeDoppler Matrix and leaves radar cube filled with 1D FFT data.
- *
- *    After CFAR and peak grouping phase, \n
- *        - 2D FFT is recalculated for the detected objects.
- *        - The rest of the Angle estimation and Elevation estimation are the same as in @ref dataAngElev_low.
- *
- *
- *   In the diagram:
- *   - A is @ref MMW_EDMA_2DFFT_SINGLERBIN_CH_ID,
- *   - B is @ref MMW_EDMA_2DFFT_SINGLERBIN_CHAIN_CH_ID
- *   - A_shadow is @ref MMW_EDMA_2DFFT_SINGLERBIN_SHADOW_LINK_CH_ID
- *   - B_shadow is @ref MMW_EDMA_2DFFT_SINGLERBIN_SHADOW_LINK_CH_ID2
- *
- *  @subsection dataXYZ Data Path - Direction of Arrival Estimation (x,y,z)
- *    This processing is done on R4F CPU in the function @ref angleEstimationAzimElev.
- *    \anchor Figure_geometry
- *    @image html coordinate_geometry.png "Figure A: Coordinate Geometry"
- *    \n
- *    \anchor Figure_wz
- *    @image html coordinate_geometry_wz.png "Figure wz"
- *    \n
- *    \anchor Figures_wx
- *    @image html coordinate_geometry_wx.png "Figures wx"
- *    \ref Figure_geometry shows orientation of x,y,z axes with respect to the sensor/antenna positions. The objective is to estimate
- *    the (x,y,z) coordinates of each detected object.
- *    \f$w_x\f$ is the phase difference between consecutive receive azimuth antennas of the 2D FFT and \f$w_z\f$ is the phase difference between
- *    azimuth and corresponding elevation antenna above the azimuth antenna. The phases for each antenna are shown in the \ref Figure_doppler.
- *    \ref Figure_wz shows that the distance AB which represents the relative distance between wavefronts intersecting consecutive elevation
- *    antennas is \f$AB = \frac{\lambda}{2} \sin (\phi)\f$. Therefore \f$W_z = \frac{2\pi}{\lambda} \cdot AB\f$, therefore \f$W_z = \pi \sin (\phi)\f$.
- *    Note that the phase of the lower antenna is advanced compared to the upper
- *    antenna which is why picture X shows -Wz term in the upper antenna.
- *    \ref Figures_wx show that distance CD which represents the relative distance between wavefronts intersecting consecutive azimuth
- *    antennas is \f$CD = \frac{\lambda}{2} \sin (\theta) \cos (\phi)\f$ Therefore \f$w_x =  \frac{2\pi}{\lambda} \cdot CD\f$,
- *    therefore \f$w_x = \pi \sin (\theta) \cos (\phi)\f$.
- *    For a single obstacle, the signal at the 8 azimuth antennas will be (\f$A_1\f$ and \f$\psi\f$ are the arbitrary starting
- *    amplitude/phase at the first antenna):
- *    \f[
- *    A_1 e^{j\psi} [ 1 \; e^{jw_x} \; e^{j2w_x} \; e^{j3w_x} \; e^{j4w_x} \; e^{j5w_x} \; e^{j6w_x} \; e^{j7w_x} ]
- *    \f]
- *
- *    An FFT of the above signal will yield a peak \f$P_1\f$ at \f$w_x\f$, with the phase of this peak being \f$\psi\f$ i.e
- *    \f[
- *       P_1 = A_1 e^{j\psi}
- *    \f]
- *    If \f$k_{MAX}\f$ is the index of the peak in log magnitude FFT represented as
- *    signed index in range \f$[-\frac{N}{2}, \frac{N}{2}-1]\f$, then \f$ w_x \f$ will be
- *       \f[
- *            w_x = \frac{2\pi}{N}k_{MAX}
- *       \f]
- *
- *    The signal at the 4 elevation antennas will be:
- *     \f[
- *      A_2 e^{j(\psi + 2 w_x - w_z)} [ 1 \; e^{jw_x} \; e^{j2w_x} \; e^{j3w_x}]
- *     \f]
- *
- *    An FFT of the above signal will yield a peak \f$P_2\f$ at \f$w_x\f$, with the phase of this peak being \f$\psi + 2w_x - w_z\f$.
- *     \f[
- *        P_2 = A_2 e^{j(\psi+ 2 w_x - w_z)}
- *     \f]
- *
- *    From above,
- *     \f[
- *        P_1 \cdot P_2^* = A_1 \cdot A_2 e^{j(\psi - (\psi+ 2 w_x - w_z))}
- *     \f]
- *
- *    Therefore,
- *     \f[
- *       w_z=\angle (P_1 \cdot P_2^* \cdot e^{j2w_x})
- *     \f]
- *
- *
- *    Calculate range (in meters) as:
- *       \f[
- *           R=k_r\frac{c \cdot F_{SAMP}}{2 \cdot S \cdot N_{FFT}}
- *       \f]
- *       where, \f$c\f$ is the speed of light (m/sec), \f$k_r\f$ is range index, \f$F_{SAMP}\f$ is the sampling frequency (Hz),
- *       \f$S\f$ is chirp slope (Hz/sec), \f$N_{FFT}\f$ is 1D FFT size.
- *    Based on above calculations of \f$R\f$, \f$w_x\f$ and \f$w_z\f$, the \f$(x,y,z)\f$ position of the object
- *    can be calculated as seen in the \ref Figure_geometry,
- *       \f[
- *           x = R\cos(\phi)\sin(\theta) = R\frac{w_x}{\pi}, z = R\sin(\phi) = R\frac{w_z}{\pi}, y = \sqrt{R^2-x^2-z^2}
- *       \f]
- *    The computed \f$(x,y,z)\f$ and azimuth peak for each object are populated in their
- *    respective positions in @ref MmwDemo_DataPathObj::objOut which is
- *    then shipped out on the UART port (@ref MmwDemo_transmitProcessedOutput).
- *    To be able to detect two objects at the same range-doppler index but at different angle,
- *    search for the 2nd peak in the azimuth FFT and compare its height relative to the first peak height,
- *    and if detected, create new object in the list with the same range/Doppler
- *    indices, and repeat above steps to calculate (x,y,z) coordinates. To enable/disable
- *    the two peak detection or to change the threshold for detection, refer to
- *    @ref MMWDEMO_AZIMUTH_TWO_PEAK_DETECTION_ENABLE and @ref MMWDEMO_AZIMUTH_TWO_PEAK_THRESHOLD_SCALE.
- *
- *  @subsection output Output information sent to host
- *      Please refer to this section in the doxygen documentation of the xwr16xx mmw Demo because
- *      this is part of a unified interface. For the stats information, the
- *      following diagram applies for 14xx.
- *
- *      @image html margins_xwr14xx.png "Margins and R4F CPU loading"
- *
- *  @subsection calibration Range Bias and Rx Channel Gain/Offset Measurement and Compensation
- *       Please refer to this section in the doxygen documentation of the xwr16xx mmw Demo.
- *       The differences are as follows:
- *       -# For the scheme @ref DATA_PATH_CHAIN_COMBINED_LOGMAG, because we are
- *         computing azimuth static heat map on 1D FFT (a limitation that will be removed
- *         in a future release), the calibration procedure will
- *         not be immune to motion in the scene, hence during calibration caution
- *         must exercised to ensure there are no moving objects in the background.
- *       -# The azimuth static heat map itself is not corrected, this limitation
- *         will be removed in a future release.
- *
- *  @subsection datapathConfig Data Path - Notes on configuration and synchronization.
- *    - EDMA: For all of the data path processing, the demo uses non-overlapping
- *      EDMA resources (chain channels, link parameter sets etc) so that all EDMA configuration
- *      only needs to be done once (@ref MmwDemo_config1D_EDMA, @ref MmwDemo_config2D_EDMA and
- *      @ref MmwDemo_configCFAR_EDMA -- called in @ref MmwDemo_dataPathConfigCommon). The channel
- *      resources involved in chaining are using the channels that are not tied to any hardware
- *      entity on the SoC, these are ones that have suffix EDMA*_FREE_\<n\> as specified in the
- *      @ref sys_common.h file. An alternative implementation that is more EDMA
- *      resource constrained may overlap resources among 1D, 2D and CFAR processing at the
- *      cost of processing cycles to reconfigure the EDMA in real-time. The R4F CPU
- *      programs the EDMA through the utility APIs in @ref config_edma_util.h, which
- *      in turn invoke the EDMA driver configuration APIs to program the EDMA.
- *      The R4F CPU gets notified of the channels on which it desires completion notification
- *      through an application call-back function provided to the EDMA driver and
- *      in this function it posts the semaphore on which it can wait for completion.
- *      Present implementation shows a single call back function (@ref MmwDemo_EDMA_transferCompletionCallbackFxn)
- *      which posts different semaphores (@ref MmwDemo_DataPathObj::EDMA_1Ddone_semHandle,
- *      @ref MmwDemo_DataPathObj::EDMA_2Ddone_semHandle and @ref MmwDemo_DataPathObj::EDMA_CFARdone_semHandle)
- *      based on which channel (or rather transfer completion codes) were
- *      indicated complete by the EDMA driver. The R4F CPU can pend on the semaphores
- *      in the data path processing chain.
- *    - HWA: The window RAMs are configured for the 1D and 2D FFT only once
- *      (in @ref MmwDemo_dataPathConfigCommon). The 1D window is currently chosen to be
- *      Blackman and the 2D is chosen to be Hanning window. This may be made configurable
- *      in future. Currently, HWA PARAMs are non-overlapping among the various processing stages.
- *      So they could be configured only once like the EDMA case, but current code shows them
- *      being re-configured in the real-time along with setting the start,end indices and
- *      the loop count required for each processing stage
- *      (@ref MmwDemo_config1D_HWA, @ref MmwDemo_config2D_HWA, @ref MmwDemo_configCFAR_HWA
- *      and @ref MmwDemo_configAngleEstimation_HWA).
- *      The R4F CPU gets notified of HWA completion through an application supplied
- *      semaphore (@ref MmwDemo_DataPathObj::HWA_done_semHandle) to the HWA driver
- *      and it can pend on this semaphore. There are utility
- *      APIs provided in @ref config_hwa_util.h that are used to
- *      by the application to program the HWA.
- *
- *    @subsection designNotes Data Path Design Notes
- *    @subsubsection scaling Scaling
- *      The HWA uses 24-bit fixed point arithmetic for the data path processing.
- *      In order to prevent overflows in the FFT processing, the scaling factors have to be
- *      set appropriately in the HWA configuration. The HWA has up to 10 stages of processing
- *      with ability to scale by 1/2 for each stage.
- *      - 1D processing: If the HWA's FFT scale is set to \f$\frac{1}{2^k}\f$
- *      where \f$k\f$ is the number of stages for which the scaling is enabled, and
- *      input to the FFT were a pure tone at one of the bins, then
- *      the output magnitude of the FFT at that bin will be \f$\frac{N}{2^k}\f$ (\f$N\f$ is the FFT order) times
- *      the input tone amplitude (because tone is complex, this implies that the individual real and
- *      imaginary components will also be amplified by a maximum of this scale).
- *      Because we do a Blackman window before the FFT, the overall scale is about 1/2.4 of the FFT scale.
- *      This means for example for 256 point FFT, the windowing + FFT scale will be \f$\frac{106.7}{2^k}\f$.
- *      For k=2 which is currently how it is in the implementation (no matter the FFT order), this will be 26.7.
- *      Therefore, the ADC output when it is a pure tone should not exceed +/-2^15/26.7 = 1228 for
- *      the I and Q components (even though HWA is internally 24-bit, the FFT output is stored
- *      as 16-bit before 2D processing, hence 2^15).
- *      The XWR14xx EVM when presented with a strong single reflector
- *      reasonably close to it (with Rx dB gain of 30 dB in the chirp profile)
- *      shows ADC samples to be a max of about 2000 and while this exceeds
- *      the 1228 maximum, is not a pure tone, the energy of the FFT is seen in other bins
- *      also and the solution still works well and detects the strong object.
- *      - 2D processing: For the 2D FFT, given that the input is the output of 1D FFT that
- *      can amplify its input as mentioned in previous section, it is more appropriate to use
- *      full scale. So currently in the implementation, scaling is enabled for all stages of the FFT
- *      except for the first stage because of Hanning window related scaling by 1/2.
- *
- *  @section memoryUsage Memory Usage
- *  @subsection memUsageSummary Memory usage summary
- *    The table below shows the usage of various memories available on the device across 
- *    the demo application and other SDK components. The table is generated using the demo's 
- *    map file and applying some mapping rules to it to generate a condensed summary. 
- *    For the mapping rules, please refer to <a href="../../demo_mss_mapping.txt">demo_mss_mapping.txt</a>. 
- *    The numeric values shown here represent bytes. 
- *    Refer to the <a href="../../xwr14xx_mmw_demo_mss_mem_analysis_detailed.txt">xwr14xx_mmw_demo_mss_mem_analysis_detailed.txt</a>
- *    for detailed analysis of the memory usage across drivers and control/alg components and to 
- *    <a href="../../demo_mss_mapping_detailed.txt">demo_mss_mapping_detailed.txt</a> for detailed mapping rules . 
- * 
- *  \include xwr14xx_mmw_demo_mss_mem_analysis.txt
- * 
- *    Note on L3 memory and overlay
- *    ------------------------------
- *    A quick look at the L3_SRAM column will show that the total of that column exceeds the total 
- *    physical memory available on the device. The reason is that we use the code-data overlay mechanism
- *    to virtually extend the available memory on the device. One-time startup code is overlaid with the 
- *    radar cube. At startup, the application code accesses these functions to perform one-time setup functionality. 
- *    Beyond that point, application code does not have a need to access these functions again and hence switches 
- *    to access radarCube placed at the exact same location. Refer to the linker command file of the demo on the 
- *    mechanics of this overlay technique.
- *
- */
-
-/**************************************************************************
  *************************** Include Files ********************************
  **************************************************************************/
 
@@ -678,11 +59,11 @@ extern mmwHwaBuf_t gMmwHwaMemBuf[MMW_HWA_NUM_MEM_BUFS];
 extern uint32_t log2Approx(uint32_t x);
 
 /*! L3 RAM buffer */
-uint8_t gMmwL3[SOC_XWR14XX_MSS_L3RAM_SIZE];               //8Œª’˚–Œ ˝◊È£¨≥§∂»Œ™L3RAM_SIZE
+uint8_t gMmwL3[SOC_XWR14XX_MSS_L3RAM_SIZE];               //8‰ΩçÊï¥ÂΩ¢Êï∞ÁªÑÔºåÈïøÂ∫¶‰∏∫L3RAM_SIZE
 #pragma DATA_SECTION(gMmwL3, ".l3ram");                                //?
 
 /*! L3 heap for convenience of partitioning L3 RAM */
-MmwDemoMemPool_t gMmwL3heap =                                  //Ω·ππÃÂ£¨∑÷±Œ™8Œª÷∏’Î£¨32Œª’˚–Œ£¨32Œª’˚–Œ
+MmwDemoMemPool_t gMmwL3heap =                                  //ÁªìÊûÑ‰ΩìÔºåÂàÜÂà´‰∏∫8‰ΩçÊåáÈíàÔºå32‰ΩçÊï¥ÂΩ¢Ôºå32‰ΩçÊï¥ÂΩ¢
 {
     &gMmwL3[0],
     SOC_XWR14XX_MSS_L3RAM_SIZE,
@@ -697,7 +78,7 @@ MmwDemoMemPool_t gMmwL3heap =                                  //Ω·ππÃÂ£¨∑÷±Œ™8
  * @brief
  *  Global Variable for tracking information required by the mmw Demo
  */
-MmwDemo_MCB    gMmwMCB;             //Ω·ππÃÂ£¨¥Ê¥¢∫¡√◊≤®—› æœ‡πÿ–≈œ¢
+MmwDemo_MCB    gMmwMCB;             //ÁªìÊûÑ‰ΩìÔºåÂ≠òÂÇ®ÊØ´Á±≥Ê≥¢ÊºîÁ§∫Áõ∏ÂÖ≥‰ø°ÊÅØ
 
 
 /**************************************************************************
@@ -710,17 +91,17 @@ extern void MmwDemo_CLIInit (void);
  ************************* Millimeter Wave Demo Functions **********************
  **************************************************************************/
 
-void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1);            //πÿ¡™debug
+void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1);            //ÂÖ≥ËÅîdebug
 
 void MmwDemo_dataPathInit(MmwDemo_DataPathObj *obj);
 void MmwDemo_dataPathConfig(void);
 void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj);
 
 void MmwDemo_getAngleBinsAtPeak(uint32_t numObj,
-                                     MmwDemo_detectedObj *objOut,           //∑∂Œß÷∏ ˝£¨∂‡∆’¿’÷∏ ˝£¨∑Â÷µ£¨Ω«∂»x£¨y£¨z
+                                     MmwDemo_detectedObj *objOut,           //ËåÉÂõ¥ÊåáÊï∞ÔºåÂ§öÊôÆÂãíÊåáÊï∞ÔºåÂ≥∞ÂÄºÔºåËßíÂ∫¶xÔºåyÔºåz
                                      uint16_t *pAngleBins);
 
-void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,          //Õ®π˝UART¥´ ‰ºÏ≤‚ ˝æ›
+void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,          //ÈÄöËøáUART‰º†ËæìÊ£ÄÊµãÊï∞ÊçÆ
                                     MmwDemo_DataPathObj *obj);
 
 void MmwDemo_initTask(UArg arg0, UArg arg1);
@@ -735,7 +116,7 @@ void MmwDemo_sleep(void);
  *  @n
  *      Send assert information through CLI.
  */
-void _MmwDemo_debugAssert(int32_t expression, const char *file, int32_t line)     //expressionŒ™0 ±÷¥––
+void _MmwDemo_debugAssert(int32_t expression, const char *file, int32_t line)     //expression‰∏∫0Êó∂ÊâßË°å
 {
     if (!expression) {
         CLI_write ("Exception: %s, line %d.\n",file,line);
@@ -747,7 +128,7 @@ void _MmwDemo_debugAssert(int32_t expression, const char *file, int32_t line)   
  *  @n
  *      Get a handle for ADCBuf.
  */
-void MmwDemo_ADCBufOpen(MmwDemo_DataPathObj *obj)                  //ADCª∫≥Â∆˜
+void MmwDemo_ADCBufOpen(MmwDemo_DataPathObj *obj)                  //ADCÁºìÂÜ≤Âô®
 {
     ADCBuf_Params       ADCBufparams;
     /*****************************************************************************
@@ -772,9 +153,9 @@ void MmwDemo_ADCBufOpen(MmwDemo_DataPathObj *obj)                  //ADCª∫≥Â∆˜
 
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ≈‰÷√ADCª∫≥Â∆˜£¨∑µªÿRxÃÏœﬂ ˝¡ø
+ *      ÈÖçÁΩÆADCÁºìÂÜ≤Âô®ÔºåËøîÂõûRxÂ§©Á∫øÊï∞Èáè
  */
 int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
 {
@@ -782,10 +163,10 @@ int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
     ADCBuf_dataFormat   dataFormat;
     ADCBuf_RxChanConf   rxChanConf;
     uint8_t             channel;
-    int32_t             retVal = 0;                    //∑µªÿ÷µ
+    int32_t             retVal = 0;                    //ËøîÂõûÂÄº
     uint8_t             numBytePerSample = 0;
     MmwDemo_ADCBufCfg*  ptrAdcbufCfg;
-    uint32_t            chirpThreshold;               //ﬂ˙‡±»Îø⁄
+    uint32_t            chirpThreshold;               //ÂïÅÂïæÂÖ•Âè£
     uint32_t            rxChanMask = 0xF;
 
     ptrAdcbufCfg = &dataPathObj->cliCfg->adcBufCfg;
@@ -831,12 +212,12 @@ int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
 
     memset((void*)&rxChanConf, 0, sizeof(ADCBuf_RxChanConf));
 
-    /* ∆Ù”√Õ®µ¿≈‰÷√÷–÷∏ æµƒRxÕ®µ¿ */
+    /* ÂêØÁî®ÈÄöÈÅìÈÖçÁΩÆ‰∏≠ÊåáÁ§∫ÁöÑRxÈÄöÈÅì */
     for (channel = 0; channel < SYS_COMMON_NUM_RX_CHANNEL; channel++)
     {
         if(gMmwMCB.cfg.openCfg.chCfg.rxChannelEn & (0x1<<channel))
         {
-            /* ÃÓ≥‰Ω” ’Õ®µ¿≈‰÷√: */
+            /* Â°´ÂÖÖÊé•Êî∂ÈÄöÈÅìÈÖçÁΩÆ: */
             rxChanConf.channel = channel;
             retVal = ADCBuf_control(dataPathObj->adcbufHandle, ADCBufMMWave_CMD_CHANNEL_ENABLE, (void *)&rxChanConf);
             if (retVal < 0)
@@ -850,7 +231,7 @@ int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
 
     chirpThreshold = ptrAdcbufCfg->chirpThreshold;
 
-    /* …Ë÷√ﬂ˙‡±„–÷µ: */
+    /* ËÆæÁΩÆÂïÅÂïæÈòàÂÄº: */
     retVal = ADCBuf_control(dataPathObj->adcbufHandle, ADCBufMMWave_CMD_SET_CHIRP_THRESHHOLD,
                             (void *)&chirpThreshold);
     if(retVal < 0)
@@ -864,9 +245,9 @@ exit:
 
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      Ω‚ŒˆProfile£¨Chirp∫ÕFrame≈‰÷√≤¢Ã·»°¥¶¿Ì¡¥≈‰÷√À˘–Ëµƒ≤Œ ˝
+ *      Ëß£ÊûêProfileÔºåChirpÂíåFrameÈÖçÁΩÆÂπ∂ÊèêÂèñÂ§ÑÁêÜÈìæÈÖçÁΩÆÊâÄÈúÄÁöÑÂèÇÊï∞
  */
 bool MmwDemo_parseProfileAndChirpConfig(MmwDemo_DataPathObj *dataPathObj)
 {
@@ -1099,7 +480,7 @@ bool MmwDemo_parseProfileAndChirpConfig(MmwDemo_DataPathObj *dataPathObj)
 
 void MmwDemo_measurementResultOutput(MmwDemo_DataPathObj *obj)
 {
-    /* Õ®π˝CLI∑¢ÀÕ ’µΩµƒDSS–£◊º–≈œ¢ */
+    /* ÈÄöËøáCLIÂèëÈÄÅÊî∂Âà∞ÁöÑDSSÊ†°ÂáÜ‰ø°ÊÅØ */
     CLI_write ("compRangeBiasAndRxChanPhase");
     CLI_write (" %.7f", obj->cliCommonCfg->compRxChanCfg.rangeBias);
     int32_t i;
@@ -1112,9 +493,9 @@ void MmwDemo_measurementResultOutput(MmwDemo_DataPathObj *obj)
 
 }
 
-/** @∏≈ ˆ Õ®π˝UART¥´ÀÕºÏ≤‚ ˝æ›
+/** @Ê¶ÇËø∞ ÈÄöËøáUART‰º†ÈÄÅÊ£ÄÊµãÊï∞ÊçÆ
 *
-*    œ¬¡– ˝æ›±ª¥´ ‰:
+*    ‰∏ãÂàóÊï∞ÊçÆË¢´‰º†Ëæì:
 *    1. Header (size = 32bytes), including "Magic word", (size = 8 bytes)
 *       and icluding the number of TLV items
 *    TLV Items:
@@ -1148,12 +529,12 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
 
     MmwDemo_output_message_tl   tl[MMWDEMO_OUTPUT_MSG_MAX];
 
-    /*ªÒ»°GUIº‡ ”∆˜ ˝æ› */
+    /*Ëé∑ÂèñGUIÁõëËßÜÂô®Êï∞ÊçÆ */
     pGuiMonSel = &gMmwMCB.cliCfg.guiMonSel;
 
-    /*«Â≥˛–≈œ¢÷°Õ∑*/
+    /*Ê∏ÖÊ•ö‰ø°ÊÅØÂ∏ßÂ§¥*/
     memset((void *)&header, 0, sizeof(MmwDemo_output_message_header));
-    /* ÷°Õ∑: */
+    /* Â∏ßÂ§¥: */
     header.platform = 0xA1443;
     header.magicWord[0] = 0x0102;
     header.magicWord[1] = 0x0304;
@@ -1211,7 +592,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
     }
 
     header.numTLVs = tlvIdx;
-    /* ’˚¿Ì ˝æ›∞¸≥§∂»Œ™MMWDEMO_OUTPUT_MSG_SEGMENT_LEN±∂ */
+    /* Êï¥ÁêÜÊï∞ÊçÆÂåÖÈïøÂ∫¶‰∏∫MMWDEMO_OUTPUT_MSG_SEGMENT_LENÂÄç */
     header.totalPacketLen = MMWDEMO_OUTPUT_MSG_SEGMENT_LEN *
             ((packetLen + (MMWDEMO_OUTPUT_MSG_SEGMENT_LEN-1))/MMWDEMO_OUTPUT_MSG_SEGMENT_LEN);
     header.timeCpuCycles =  Pmu_getCount(0);
@@ -1223,7 +604,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
                        sizeof(MmwDemo_output_message_header));
 
     tlvIdx = 0;
-    /* ∑¢ÀÕºÏ≤‚∂‘œÛ */
+    /* ÂèëÈÄÅÊ£ÄÊµãÂØπË±° */
     if ((pGuiMonSel->detectedObjects == 1) && (obj->numObjOut > 0))
     {
         MmwDemo_output_message_dataObjDescr descr;
@@ -1231,17 +612,17 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         UART_writePolling (uartHandle,
                            (uint8_t*)&tl[tlvIdx],
                            sizeof(MmwDemo_output_message_tl));
-        /* ∑¢ÀÕ∂‘œÛ√Ë ˆ∑˚ */
+        /* ÂèëÈÄÅÂØπË±°ÊèèËø∞Á¨¶ */
         descr.numDetetedObj = (uint16_t) obj->numObjOut;
         descr.xyzQFormat = (uint16_t) obj->xyzOutputQFormat;
         UART_writePolling (uartHandle, (uint8_t*)&descr, sizeof(MmwDemo_output_message_dataObjDescr));
 
-        /*∑¢ÀÕ∂‘œÛ ˝◊È */
+        /*ÂèëÈÄÅÂØπË±°Êï∞ÁªÑ */
         UART_writePolling (uartHandle, (uint8_t*)obj->objOut, sizeof(MmwDemo_detectedObj) * obj->numObjOut);
         tlvIdx++;
     }
 
-    /* ∑¢ÀÕ∑∂Œß≈‰÷√Œƒº˛ */
+    /* ÂèëÈÄÅËåÉÂõ¥ÈÖçÁΩÆÊñá‰ª∂ */
     if (pGuiMonSel->logMagRange)
     {
         UART_writePolling (uartHandle,
@@ -1257,7 +638,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* ∑¢ÀÕ‘Î“Ù≈‰÷√Œƒº˛ */
+    /* ÂèëÈÄÅÂô™Èü≥ÈÖçÁΩÆÊñá‰ª∂ */
     if (pGuiMonSel->noiseProfile)
     {
         uint32_t maxDopIdx = obj->numDopplerBins/2 -1;
@@ -1274,7 +655,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* ∑¢ÀÕæ≤Ã¨∑ΩŒª»»Õºµƒ ˝æ› */
+    /* ÂèëÈÄÅÈùôÊÄÅÊñπ‰ΩçÁÉ≠ÂõæÁöÑÊï∞ÊçÆ */
     if (pGuiMonSel->rangeAzimuthHeatMap)
     {
         uint32_t skip = obj->numChirpsPerFrame * obj->numRxAntennas;
@@ -1293,7 +674,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* ∑¢ÀÕ∑∂Œß/∂‡∆’¿’»»Õºµƒ ˝æ› */
+    /* ÂèëÈÄÅËåÉÂõ¥/Â§öÊôÆÂãíÁÉ≠ÂõæÁöÑÊï∞ÊçÆ */
     if (pGuiMonSel->rangeDopplerHeatMap == 1)
     {
         UART_writePolling (uartHandle,
@@ -1305,11 +686,11 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* ∑¢ÀÕÕ≥º∆–≈œ¢ */
+    /* ÂèëÈÄÅÁªüËÆ°‰ø°ÊÅØ */
     if (pGuiMonSel->statsInfo == 1)
     {
         MmwDemo_output_message_stats stats;
-        stats.interChirpProcessingMargin = 0; /* ≤ªø…”√ */
+        stats.interChirpProcessingMargin = 0; /* ‰∏çÂèØÁî® */
         stats.interFrameProcessingMargin = (uint32_t) (obj->timingInfo.interFrameProcessingEndMargin/R4F_CLOCK_MHZ); /* In micro seconds */
         stats.interFrameProcessingTime = (uint32_t) (obj->timingInfo.interFrameProcCycles/R4F_CLOCK_MHZ); /* In micro seconds */
         stats.transmitOutputTime = (uint32_t) (obj->timingInfo.transmitOutputCycles/R4F_CLOCK_MHZ); /* In micro seconds */
@@ -1325,7 +706,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* ∑¢ÀÕÃÓ≥‰◊÷Ω⁄ */
+    /* ÂèëÈÄÅÂ°´ÂÖÖÂ≠óËäÇ */
     numPaddingBytes = MMWDEMO_OUTPUT_MSG_SEGMENT_LEN - (packetLen & (MMWDEMO_OUTPUT_MSG_SEGMENT_LEN-1));
     if (numPaddingBytes<MMWDEMO_OUTPUT_MSG_SEGMENT_LEN)
     {
@@ -1336,35 +717,35 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ’‚∏ˆ∫Ø ˝”√¿¥“˝∑¢¿◊¥Ô«∞∂À≤˙…˙ﬂ˙‡±°£
+ *      Ëøô‰∏™ÂáΩÊï∞Áî®Êù•ÂºïÂèëÈõ∑ËææÂâçÁ´Ø‰∫ßÁîüÂïÅÂïæ„ÄÇ
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√.
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®.
  */
 int32_t MmwDemo_dataPathStart (void)
 {
-    MMWave_CalibrationCfg   calibrationCfg;           //–£◊º
+    MMWave_CalibrationCfg   calibrationCfg;           //Ê†°ÂáÜ
     int32_t                 errCode = 0;
     MmwDemo_DataPathObj *dataPathObj = &gMmwMCB.dataPathObj;
 
     dataPathObj->frameStartIntCounter = 0;
     dataPathObj->interFrameProcToken = 0;
 
-    /* ≥ı ºªØ–£◊º≈‰÷√: */
+    /* ÂàùÂßãÂåñÊ†°ÂáÜÈÖçÁΩÆ: */
     memset ((void *)&calibrationCfg, 0, sizeof(MMWave_CalibrationCfg));
 
-    /* ≈‰÷√–£◊º ˝æ›: */
+    /* ÈÖçÁΩÆÊ†°ÂáÜÊï∞ÊçÆ: */
     calibrationCfg.dfeDataOutputMode = MMWave_DFEDataOutputMode_FRAME;
     calibrationCfg.u.chirpCalibrationCfg.enableCalibration    = true;
     calibrationCfg.u.chirpCalibrationCfg.enablePeriodicity    = true;
     calibrationCfg.u.chirpCalibrationCfg.periodicTimeInFrames = 10U;
 
-    /* ∆Ù∂ØmmWaveƒ£øÈ: ≈‰÷√“—≥…π¶”¶”√. */
+    /* ÂêØÂä®mmWaveÊ®°Âùó: ÈÖçÁΩÆÂ∑≤ÊàêÂäüÂ∫îÁî®. */
     if (MMWave_start (gMmwMCB.ctrlHandle, &calibrationCfg, &errCode) < 0)
     {
-        /*¥ÌŒÛ: Œﬁ∑®∆Ù∂ØmmWaveøÿ÷∆ */
+        /*ÈîôËØØ: Êó†Ê≥ïÂêØÂä®mmWaveÊéßÂà∂ */
         //System_printf ("Error: mmWave Control Start failed [Error code %d]\n", errCode);
         MmwDemo_debugAssert (0);
     }
@@ -1372,13 +753,13 @@ int32_t MmwDemo_dataPathStart (void)
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ’‚∏ˆ∫Ø ˝±ª”√¿¥ª˘”⁄ﬂ˙‡± ˝æ›≈‰÷√data path
- *      ∏√∫Ø ˝÷¥––÷Æ∫Û£¨µ±ADCª∫≥Â∆˜ø™ º ’ºØ”Îﬂ˙‡±“ª÷¬µƒ—˘¿˝ ±£¨data pathπ˝≥ÃΩ´◊º±∏÷¥––°£
+ *      Ëøô‰∏™ÂáΩÊï∞Ë¢´Áî®Êù•Âü∫‰∫éÂïÅÂïæÊï∞ÊçÆÈÖçÁΩÆdata path
+ *      ËØ•ÂáΩÊï∞ÊâßË°å‰πãÂêéÔºåÂΩìADCÁºìÂÜ≤Âô®ÂºÄÂßãÊî∂ÈõÜ‰∏éÂïÅÂïæ‰∏ÄËá¥ÁöÑÊ†∑‰æãÊó∂Ôºådata pathËøáÁ®ãÂ∞ÜÂáÜÂ§áÊâßË°å„ÄÇ
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√.
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®.
  */
 void MmwDemo_dataPathConfig (void)
 {
@@ -1408,39 +789,39 @@ void MmwDemo_dataPathConfig (void)
     }
     else
     {
-        /* √ª”–’“µΩ”––ßprofile - assert! */
+        /* Ê≤°ÊúâÊâæÂà∞ÊúâÊïàprofile - assert! */
         MmwDemo_debugAssert(0);
     }
     return;
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *  ’‚∏ˆ∫Ø ˝‘⁄≥ı ºªØ ±£¨±ª@ref MmwDemo_initTaskµ˜”√°£
- *  À¸≥ı ºªØ’‚–©«˝∂Ø: ADCBUF, HWA, EDMA, ≤¢«“±ª@ref MmwDemo_dataPathTask”√¿¥¥´ ‰–≈∫≈°£
+ *  Ëøô‰∏™ÂáΩÊï∞Âú®ÂàùÂßãÂåñÊó∂ÔºåË¢´@ref MmwDemo_initTaskË∞ÉÁî®„ÄÇ
+ *  ÂÆÉÂàùÂßãÂåñËøô‰∫õÈ©±Âä®: ADCBUF, HWA, EDMA, Âπ∂‰∏îË¢´@ref MmwDemo_dataPathTaskÁî®Êù•‰º†Ëæì‰ø°Âè∑„ÄÇ
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√.
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®.
  */
 void MmwDemo_dataPathInit(MmwDemo_DataPathObj *obj)                         //ADC,HWA,EDMA
 {
     MmwDemo_dataPathObjInit(obj, &gMmwMCB.cliCfg, &gMmwMCB.cliCommonCfg);
 
-    /* ≥ı ºªØ ADCBUF */
+    /* ÂàùÂßãÂåñ ADCBUF */
     ADCBuf_init();
 
-    /* ≥ı ºªØ HWA */
+    /* ÂàùÂßãÂåñ HWA */
     MmwDemo_hwaInit(obj);
 
-    /* ≥ı ºªØ EDMA */
+    /* ÂàùÂßãÂåñ EDMA */
     MmwDemo_edmaInit(obj);
 }
 
-void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj)                 //¥Úø™
+void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj)                 //ÊâìÂºÄ
 {
     /*****************************************************************************
-     * ∆Ù∂Ø HWA, EDMA ∫Õ ADCBUF drivers:
+     * ÂêØÂä® HWA, EDMA Âíå ADCBUF drivers:
      *****************************************************************************/
     MmwDemo_hwaOpen(obj, gMmwMCB.socHandle);
     MmwDemo_edmaOpen(obj);
@@ -1449,20 +830,20 @@ void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj)                 //¥Úø™
 
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ’‚∏ˆ»ŒŒÒ”√¿¥Œ™mmWaveøÿ÷∆Ω¯≥ÃÃ·π©÷¥––ª∑æ≥°£
+ *      Ëøô‰∏™‰ªªÂä°Áî®Êù•‰∏∫mmWaveÊéßÂà∂ËøõÁ®ãÊèê‰æõÊâßË°åÁéØÂ¢É„ÄÇ
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√.
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®.
  */
 void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1)
 {
-    int32_t errCode;       //¥ÌŒÛ¥˙¬Î
+    int32_t errCode;       //ÈîôËØØ‰ª£Á†Å
 
     while (1)
     {
-        /* ÷¥––mmWaveøÿ÷∆ƒ£øÈ: */
+        /* ÊâßË°åmmWaveÊéßÂà∂Ê®°Âùó: */
         if (MMWave_execute (gMmwMCB.ctrlHandle, &errCode) < 0)
         {
             //System_printf ("Error: mmWave control execution failed [Error code %d]\n", errCode);
@@ -1472,32 +853,32 @@ void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1)
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      Œ™mmWave…˘√˜ ¬º˛∫Ø ˝£¨∏√∫Ø ˝µ±Ω” ’µΩ¥”BSS¥´¿¥µƒ ¬º˛ ±±ªµ˜”√°£
+ *      ‰∏∫mmWaveÂ£∞Êòé‰∫ã‰ª∂ÂáΩÊï∞ÔºåËØ•ÂáΩÊï∞ÂΩìÊé•Êî∂Âà∞‰ªéBSS‰º†Êù•ÁöÑ‰∫ã‰ª∂Êó∂Ë¢´Ë∞ÉÁî®„ÄÇ
  *
- *  @ƒ⁄≤ø≤Œ ˝  msgId
+ *  @ÂÜÖÈÉ®ÂèÇÊï∞  msgId
  *      Message Identifier
- *  @ƒ⁄≤ø≤Œ ˝  sbId
+ *  @ÂÜÖÈÉ®ÂèÇÊï∞  sbId
  *      Subblock identifier
- *  @ƒ⁄≤ø≤Œ ˝  sbLen
+ *  @ÂÜÖÈÉ®ÂèÇÊï∞  sbLen
  *      Length of the subblock
- *  @ƒ⁄≤ø≤Œ ˝  payload
+ *  @ÂÜÖÈÉ®ÂèÇÊï∞  payload
  *      Pointer to the payload buffer
  *
- *  @∑µªÿ÷µ
- *      ◊‹ «return 0.
+ *  @ËøîÂõûÂÄº
+ *      ÊÄªÊòØreturn 0.
  */
 int32_t MmwDemo_eventCallbackFxn(uint16_t msgId, uint16_t sbId, uint16_t sbLen, uint8_t *payload)
 {
     uint16_t asyncSB = RL_GET_SBID_FROM_UNIQ_SBID(sbId);
 
-    /* ¥¶¿ÌΩ” ’µΩµƒ–≈œ¢: */
+    /* Â§ÑÁêÜÊé•Êî∂Âà∞ÁöÑ‰ø°ÊÅØ: */
     switch (msgId)
     {
         case RL_RF_ASYNC_EVENT_MSG:
         {
-            /* Ω” ‹“Ï≤Ω–≈œ¢: */
+            /* Êé•ÂèóÂºÇÊ≠•‰ø°ÊÅØ: */
             switch (asyncSB)
             {
                 case RL_RF_AE_CPUFAULT_SB:
@@ -1540,8 +921,8 @@ int32_t MmwDemo_eventCallbackFxn(uint16_t msgId, uint16_t sbId, uint16_t sbLen, 
                 }
                 case RL_RF_AE_FRAME_END_SB:
                 {
-                    /*¥”BSSΩ” ‹÷°Õ£÷π“Ï≤Ω ¬º˛
-                                                          ≤ª–Ë“™»Œ∫Œ∂Ø◊˜.*/
+                    /*‰ªéBSSÊé•ÂèóÂ∏ßÂÅúÊ≠¢ÂºÇÊ≠•‰∫ã‰ª∂
+                                                          ‰∏çÈúÄË¶Å‰ªª‰ΩïÂä®‰Ωú.*/
                     break;
                 }
                 default:
@@ -1562,28 +943,28 @@ int32_t MmwDemo_eventCallbackFxn(uint16_t msgId, uint16_t sbId, uint16_t sbLen, 
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ∏√»ŒŒÒ”√¿¥∂‘data pathΩ¯––¥¶¿Ì£¨≤¢«“Õ®π˝UART ‰≥ˆø⁄¥´ ‰ºÏ≤‚∂‘œÛ°£
+ *      ËØ•‰ªªÂä°Áî®Êù•ÂØπdata pathËøõË°åÂ§ÑÁêÜÔºåÂπ∂‰∏îÈÄöËøáUARTËæìÂá∫Âè£‰º†ËæìÊ£ÄÊµãÂØπË±°„ÄÇ
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√°£
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®„ÄÇ
  */
 void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
 {
     MmwDemo_DataPathObj *dataPathObj = &gMmwMCB.dataPathObj;
     uint16_t numDetectedObjects;
     uint32_t startTime, transmitOutStartTime;
-    uint32_t txOrder[SYS_COMMON_NUM_TX_ANTENNAS] = {0,2,1};                 //ÃÏœﬂÀ≥–Ú
+    uint32_t txOrder[SYS_COMMON_NUM_TX_ANTENNAS] = {0,2,1};                 //Â§©Á∫øÈ°∫Â∫è
     while(1)
     {
-        Semaphore_pend(dataPathObj->frameStart_semHandle, BIOS_WAIT_FOREVER);   //∑¢≥ˆ–≈∫≈
+        Semaphore_pend(dataPathObj->frameStart_semHandle, BIOS_WAIT_FOREVER);   //ÂèëÂá∫‰ø°Âè∑
 
         Load_update();
         dataPathObj->timingInfo.interFrameCPULoad=Load_getCPULoad();
 
         MmwDemo_dataPathWait1D(dataPathObj);
-        /* “ªŒ¨FFTÕÍ≥… */
+        /* ‰∏ÄÁª¥FFTÂÆåÊàê */
 
         Load_update();
         dataPathObj->timingInfo.activeFrameCPULoad=Load_getCPULoad();
@@ -1602,7 +983,7 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
                  MmwDemo_dcRangeSignatureCompensation(dataPathObj);
              }
         }
-           /*»•≥˝‘”≤® */
+           /*ÂéªÈô§ÊùÇÊ≥¢ */
         if (dataPathObj->cliCfg->clutterRemovalCfg.enabled)
         {
             int32_t rngIdx, antIdx, dopIdx;
@@ -1636,16 +1017,16 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
         }
 
         MmwDemo_process2D(dataPathObj);
-        /* ∂˛Œ¨FFTÕÍ≥… */
+        /* ‰∫åÁª¥FFTÂÆåÊàê */
 
-        /* ∑∂Œß∆´≤Ó≤‚¡ø∫ÕRxÕ®µ¿‘ˆ“Ê/œ‡Œª∆´“∆≤‚¡øµƒ≥Ã–Ú */
+        /* ËåÉÂõ¥ÂÅèÂ∑ÆÊµãÈáèÂíåRxÈÄöÈÅìÂ¢ûÁõä/Áõ∏‰ΩçÂÅèÁßªÊµãÈáèÁöÑÁ®ãÂ∫è */
         if(dataPathObj->cliCommonCfg->measureRxChanCfg.enabled)
         {
             MmwDemo_rangeBiasRxChPhaseMeasure(
                     dataPathObj->cliCommonCfg->measureRxChanCfg.targetDistance,
-                    dataPathObj->rangeResolution,           //∑∂Œß∑÷±Ê¬ 
+                    dataPathObj->rangeResolution,           //ËåÉÂõ¥ÂàÜËæ®Áéá
                     dataPathObj->cliCommonCfg->measureRxChanCfg.searchWinSize,
-                    dataPathObj->rangeDopplerLogMagMatrix, //∑∂Œß∂‡∆’¿’æÿ’Û
+                    dataPathObj->rangeDopplerLogMagMatrix, //ËåÉÂõ¥Â§öÊôÆÂãíÁü©Èòµ
                     dataPathObj->numDopplerBins,
                     dataPathObj->numVirtualAntennas,
                     dataPathObj->numVirtualAntennas * dataPathObj->numDopplerBins,
@@ -1658,19 +1039,19 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
         }
 
         MmwDemo_processCfar(dataPathObj, &numDetectedObjects);
-        /* CFARÕÍ≥…*/
+        /* CFARÂÆåÊàê*/
 
-        /* ‘§¥¶¿Ì/Ω«∂»π¿º∆ */
+        /* È¢ÑÂ§ÑÁêÜ/ËßíÂ∫¶‰º∞ËÆ° */
         dataPathObj->numHwaCfarDetections = numDetectedObjects;
         MmwDemo_processAngle(dataPathObj);
 
-        /* º∆À„‘Î“Ùµ»º∂. ÷ª”√”⁄EVM’Ô∂œ°£ºŸ∂®≥°æ∞πÃ∂®≤ª±‰°£ */
+        /* ËÆ°ÁÆóÂô™Èü≥Á≠âÁ∫ß. Âè™Áî®‰∫éEVMËØäÊñ≠„ÄÇÂÅáÂÆöÂú∫ÊôØÂõ∫ÂÆö‰∏çÂèò„ÄÇ */
         dataPathObj->noiseEnergy = calcNoiseFloor (dataPathObj->radarCube, dataPathObj->numDopplerBins,
                 dataPathObj->numRangeBins, dataPathObj->numVirtualAntennas);
 
         transmitOutStartTime = Pmu_getCount(0);
 
-        /* Ω´∑∂Œß∆´≤Ó≤‚¡ø∫ÕRxÕ®µ¿‘ˆ“Ê≤‚¡ø÷µ¥´∏¯MSS“‘º∞¥´∏¯Cli*/
+        /* Â∞ÜËåÉÂõ¥ÂÅèÂ∑ÆÊµãÈáèÂíåRxÈÄöÈÅìÂ¢ûÁõäÊµãÈáèÂÄº‰º†ÁªôMSS‰ª•Âèä‰º†ÁªôCli*/
          if(dataPathObj->cliCommonCfg->measureRxChanCfg.enabled)
          {
              MmwDemo_measurementResultOutput (dataPathObj);
@@ -1681,12 +1062,12 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
 
         dataPathObj->timingInfo.transmitOutputCycles = Pmu_getCount(0) - transmitOutStartTime;
 
-        /* Œ™œ¬“ª÷°◊ˆ◊º±∏*/
+        /* ‰∏∫‰∏ã‰∏ÄÂ∏ßÂÅöÂáÜÂ§á*/
         MmwDemo_config1D_HWA(dataPathObj);
         MmwDemo_dataPathTrigger1D(dataPathObj);
 
-        /* ¥¶¿Ì 2D, CFAR, ∑ΩŒªΩ«/—ˆΩ« ÷‹∆⁄
-                               ¥¶¿Ì    excluding sending out data */
+        /* Â§ÑÁêÜ 2D, CFAR, Êñπ‰ΩçËßí/‰ª∞Ëßí Âë®Êúü
+                               Â§ÑÁêÜ    excluding sending out data */
         dataPathObj->timingInfo.interFrameProcessingEndTime = Pmu_getCount(0);
         dataPathObj->timingInfo.interFrameProcCycles = dataPathObj->timingInfo.interFrameProcessingEndTime - startTime -
             dataPathObj->timingInfo.transmitOutputCycles;
@@ -1698,25 +1079,25 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
 
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ÷°∆ º÷–∂œ¥¶¿Ì≥Ã–Ú
+ *      Â∏ßËµ∑Âßã‰∏≠Êñ≠Â§ÑÁêÜÁ®ãÂ∫è
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√°£
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®„ÄÇ
  */
 static void MmwDemo_frameStartIntHandler(uintptr_t arg)
 {
     MmwDemo_DataPathObj * dpObj = &gMmwMCB.dataPathObj;
 
-    /* ‘ˆ¡ø÷–∂œº∆ ˝∆˜£®ƒøµƒŒ™debug£©*/
+    /* Â¢ûÈáè‰∏≠Êñ≠ËÆ°Êï∞Âô®ÔºàÁõÆÁöÑ‰∏∫debugÔºâ*/
     dpObj->frameStartIntCounter++;
 
-    /* ◊¢“‚: µ⁄“ª÷°∫Û”––ß */
+    /* Ê≥®ÊÑè: Á¨¨‰∏ÄÂ∏ßÂêéÊúâÊïà */
     dpObj->timingInfo.interFrameProcessingEndMargin =
             Pmu_getCount(0) - dpObj->timingInfo.interFrameProcessingEndTime;
 
-    /* ºÏ≤È…œ“ª∏ˆﬂ˙‡±¥¶¿Ì «∑ÒÕÍ≥… */
+    /* Ê£ÄÊü•‰∏ä‰∏Ä‰∏™ÂïÅÂïæÂ§ÑÁêÜÊòØÂê¶ÂÆåÊàê */
     MmwDemo_debugAssert(dpObj->interFrameProcToken == 0);
     dpObj->interFrameProcToken++;
 
@@ -1726,56 +1107,56 @@ static void MmwDemo_frameStartIntHandler(uintptr_t arg)
 
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      œµÕ≥≥ı ºªØ»ŒŒÒ£¨≥ı ºªØ œµÕ≥÷–∏˜∏ˆ≤ø∑÷°£
+ *      Á≥ªÁªüÂàùÂßãÂåñ‰ªªÂä°ÔºåÂàùÂßãÂåñ Á≥ªÁªü‰∏≠ÂêÑ‰∏™ÈÉ®ÂàÜ„ÄÇ
  *
- *  @∑µªÿ÷µ
- *     ≤ªø…”√.
+ *  @ËøîÂõûÂÄº
+ *     ‰∏çÂèØÁî®.
  */
-void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
+void MmwDemo_initTask(UArg arg0, UArg arg1)                 //ÂàùÂßãÂåñ
 {
     int32_t             errCode;
     MMWave_InitCfg      initCfg;
     UART_Params         uartParams;
     Task_Params         taskParams;
 
-    /* debug–≈œ¢: */
+    /* debug‰ø°ÊÅØ: */
     System_printf("Debug: Launched the Initialization Task\n");
 
     /*****************************************************************************
-     *≥ı ºªØmmWave SDK components:
+     *ÂàùÂßãÂåñmmWave SDK components:
      *****************************************************************************/
 
-    /* ≥ı ºªØthe UART */
+    /* ÂàùÂßãÂåñthe UART */
     UART_init();
 
-    /* ≥ı ºªØMailbox */
+    /* ÂàùÂßãÂåñMailbox */
     Mailbox_init(MAILBOX_TYPE_MSS);
 
-    /*≥ı ºªØGPIO */
+    /*ÂàùÂßãÂåñGPIO */
     GPIO_init ();
 
-    /* ≥ı ºªØData Path: */
+    /* ÂàùÂßãÂåñData Path: */
     MmwDemo_dataPathInit(&gMmwMCB.dataPathObj);
 
     /*****************************************************************************
-     * ¥Úø™&≈‰÷√«˝∂Ø:
+     * ÊâìÂºÄ&ÈÖçÁΩÆÈ©±Âä®:
      *****************************************************************************/
 
-    /* ≈‰÷√PINMUXπ§æﬂ¿¥¥Úø™UART-1 */
+    /* ÈÖçÁΩÆPINMUXÂ∑•ÂÖ∑Êù•ÊâìÂºÄUART-1 */
     Pinmux_Set_OverrideCtrl(SOC_XWR14XX_PINN6_PADBE, PINMUX_OUTEN_RETAIN_HW_CTRL, PINMUX_INPEN_RETAIN_HW_CTRL);
     Pinmux_Set_FuncSel(SOC_XWR14XX_PINN6_PADBE, SOC_XWR14XX_PINN6_PADBE_MSS_UARTA_TX);
     Pinmux_Set_OverrideCtrl(SOC_XWR14XX_PINN5_PADBD, PINMUX_OUTEN_RETAIN_HW_CTRL, PINMUX_INPEN_RETAIN_HW_CTRL);
     Pinmux_Set_FuncSel(SOC_XWR14XX_PINN5_PADBD, SOC_XWR14XX_PINN5_PADBD_MSS_UARTA_RX);
 
-    /* ≈‰÷√ƒ¨»œUART≤Œ ˝ */
+    /* ÈÖçÁΩÆÈªòËÆ§UARTÂèÇÊï∞ */
     UART_Params_init(&uartParams);
     uartParams.clockFrequency = gMmwMCB.cfg.sysClockFrequency;
     uartParams.baudRate       = gMmwMCB.cfg.commandBaudRate;
     uartParams.isPinMuxDone   = 1;
 
-    /* ¥Úø™UART µ¿˝ */
+    /* ÊâìÂºÄUARTÂÆû‰æã */
     gMmwMCB.commandUartHandle = UART_open(0, &uartParams);
     if (gMmwMCB.commandUartHandle == NULL)
     {
@@ -1785,7 +1166,7 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
     }
     //System_printf("Debug: UART Instance %p has been opened successfully\n", gMmwMCB.commandUartHandle);
 
-    /* ≈‰÷√ƒ¨»œUART≤Œ ˝ */
+    /* ÈÖçÁΩÆÈªòËÆ§UARTÂèÇÊï∞ */
     UART_Params_init(&uartParams);
     uartParams.writeDataMode = UART_DATA_BINARY;
     uartParams.readDataMode = UART_DATA_BINARY;
@@ -1804,13 +1185,13 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
     //System_printf("Debug: UART Instance %p has been opened successfully\n", gMmwMCB.loggingUartHandle);
 
     /*****************************************************************************
-     * mmWave: ∏ﬂº∂ƒ£øÈ≥ı ºªØ
+     * mmWave: È´òÁ∫ßÊ®°ÂùóÂàùÂßãÂåñ
      *****************************************************************************/
 
-    /* ≥ı ºªØmmWave≥ı ºªØ≈‰÷√ */
+    /* ÂàùÂßãÂåñmmWaveÂàùÂßãÂåñÈÖçÁΩÆ */
     memset ((void*)&initCfg, 0 , sizeof(MMWave_InitCfg));
 
-    /* ÃÓ»Î≥ı ºªØ≈‰÷√: */
+    /* Â°´ÂÖ•ÂàùÂßãÂåñÈÖçÁΩÆ: */
     initCfg.domain                  = MMWave_Domain_MSS;
     initCfg.socHandle               = gMmwMCB.socHandle;
     initCfg.eventFxn                = MmwDemo_eventCallbackFxn;
@@ -1818,22 +1199,22 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
     initCfg.linkCRCCfg.crcChannel   = CRC_Channel_CH1;
     initCfg.cfgMode                 = MMWave_ConfigurationMode_FULL;
 
-    /* ≥ı ºªØ°¢…Ë÷√mmWaveøÿ÷∆ƒ£øÈ */
+    /* ÂàùÂßãÂåñ„ÄÅËÆæÁΩÆmmWaveÊéßÂà∂Ê®°Âùó */
     gMmwMCB.ctrlHandle = MMWave_init (&initCfg, &errCode);
     if (gMmwMCB.ctrlHandle == NULL)
     {
-        /* ¥ÌŒÛ£∫Œﬁ∑®≥ı ºªØmmWave øÿ÷∆ƒ£øÈ */
+        /* ÈîôËØØÔºöÊó†Ê≥ïÂàùÂßãÂåñmmWave ÊéßÂà∂Ê®°Âùó */
         //System_printf ("Error: mmWave Control Initialization failed [Error code %d]\n", errCode);
         MmwDemo_debugAssert (0);
         return;
     }
     //System_printf ("Debug: mmWave Control Initialization was successful\n");
 
-    /* Õ¨≤Ω:’‚Ω´Õ¨≤Ω≤ªÕ¨«¯”Ú÷Æº‰øÿ÷∆ƒ£øÈµƒ÷¥––°£
-     * ’‚ «“ª∏ˆ«∞Ã·£¨≤¢«“◊‹ «–Ë“™±ªµ˜”√°£*/
+    /* ÂêåÊ≠•:ËøôÂ∞ÜÂêåÊ≠•‰∏çÂêåÂå∫Âüü‰πãÈó¥ÊéßÂà∂Ê®°ÂùóÁöÑÊâßË°å„ÄÇ
+     * ËøôÊòØ‰∏Ä‰∏™ÂâçÊèêÔºåÂπ∂‰∏îÊÄªÊòØÈúÄË¶ÅË¢´Ë∞ÉÁî®„ÄÇ*/
     if (MMWave_sync (gMmwMCB.ctrlHandle, &errCode) < 0)
     {
-        /* ¥ÌŒÛ£∫Œﬁ∑®Õ¨≤ΩmmWave controlƒ£øÈ */
+        /* ÈîôËØØÔºöÊó†Ê≥ïÂêåÊ≠•mmWave controlÊ®°Âùó */
         //System_printf ("Error: mmWave Control Synchronization failed [Error code %d]\n", errCode);
         MmwDemo_debugAssert (0);
         return;
@@ -1842,13 +1223,13 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
 
     MmwDemo_dataPathOpen(&gMmwMCB.dataPathObj);
 
-    /* ≈‰÷√ª˘◊ºº∆ ˝∆˜ */
+    /* ÈÖçÁΩÆÂü∫ÂáÜËÆ°Êï∞Âô® */
     Pmu_configureCounter(0, 0x11, FALSE);
     Pmu_startCounter(0);
 
     /*****************************************************************************
-     * ∆Ù∂ØmmWave control÷¥––»ŒŒÒ
-     * - ¥À»ŒŒÒ”√µΩ¡ÀmmWave control API,”¶∏√±»∆‰À˚»ŒŒÒ”≈œ»º∂∏¸∏ﬂ
+     * ÂêØÂä®mmWave controlÊâßË°å‰ªªÂä°
+     * - Ê≠§‰ªªÂä°Áî®Âà∞‰∫ÜmmWave control API,Â∫îËØ•ÊØîÂÖ∂‰ªñ‰ªªÂä°‰ºòÂÖàÁ∫ßÊõ¥È´ò
      *****************************************************************************/
     Task_Params_init(&taskParams);
     taskParams.priority  = 5;
@@ -1856,24 +1237,24 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
     Task_create(MmwDemo_mmWaveCtrlTask, &taskParams, NULL);
 
     /*****************************************************************************
-     * ≥ı ºªØ√¸¡Ó––ΩÁ√Êƒ£øÈ
+     * ÂàùÂßãÂåñÂëΩ‰ª§Ë°åÁïåÈù¢Ê®°Âùó
      *****************************************************************************/
     MmwDemo_CLIInit();
 
     /*****************************************************************************
-     * ≥ı ºªØ¥´∏–∆˜π‹¿Ìƒ£øÈ
+     * ÂàùÂßãÂåñ‰º†ÊÑüÂô®ÁÆ°ÁêÜÊ®°Âùó
      *****************************************************************************/
     if (MmwDemo_sensorMgmtInit() < 0)
         return;
 
-    //ºƒ¥Ê∆˜÷°∆Ù∂Ø÷–∂œ¥¶¿Ì
+    //ÂØÑÂ≠òÂô®Â∏ßÂêØÂä®‰∏≠Êñ≠Â§ÑÁêÜ
     {
         SOC_SysIntListenerCfg  socIntCfg;
         int32_t errCode;
 
         Semaphore_Params       semParams;
 
-        //ºƒ¥Ê∆˜÷°∆Ù∂Ø÷–∂œº‡Ã˝
+        //ÂØÑÂ≠òÂô®Â∏ßÂêØÂä®‰∏≠Êñ≠ÁõëÂê¨
         socIntCfg.systemInterrupt  = SOC_XWR14XX_DSS_FRAME_START_IRQ;
         socIntCfg.listenerFxn      = MmwDemo_frameStartIntHandler;
         socIntCfg.arg              = (uintptr_t)NULL;
@@ -1890,7 +1271,7 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
     }
 
     /*****************************************************************************
-     * ∆Ù∂Ømain»ŒŒÒ
+     * ÂêØÂä®main‰ªªÂä°
      *****************************************************************************/
     Task_Params_init(&taskParams);
     taskParams.priority  = 4;
@@ -1901,28 +1282,28 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)                 //≥ı ºªØ
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      ∫Ø ˝ π”√µ»¥˝÷–∂œ÷∏¡Ó¿¥–›√ﬂARM Cortex-R4Fƒ⁄∫À°£
- *      µ±R4Fƒ⁄∫À√ª”–π§◊˜»ŒŒÒ ±£¨biosΩ´ª·¥¶‘⁄ø’œ–Ω¯≥Ã÷–£¨≤¢«““˝”√’‚∏ˆ∫Ø ˝°£
- *      R4FΩ´ª·±ª»Œ“‚÷–∂œªΩ–—£®¿˝£∫ﬂ˙‡±÷–∂œ£©°£
+ *      ÂáΩÊï∞‰ΩøÁî®Á≠âÂæÖ‰∏≠Êñ≠Êåá‰ª§Êù•‰ºëÁú†ARM Cortex-R4FÂÜÖÊ†∏„ÄÇ
+ *      ÂΩìR4FÂÜÖÊ†∏Ê≤°ÊúâÂ∑•‰Ωú‰ªªÂä°Êó∂ÔºåbiosÂ∞Ü‰ºöÂ§ÑÂú®Á©∫Èó≤ËøõÁ®ã‰∏≠ÔºåÂπ∂‰∏îÂºïÁî®Ëøô‰∏™ÂáΩÊï∞„ÄÇ
+ *      R4FÂ∞Ü‰ºöË¢´‰ªªÊÑè‰∏≠Êñ≠Âî§ÈÜíÔºà‰æãÔºöÂïÅÂïæ‰∏≠Êñ≠Ôºâ„ÄÇ
  *
- *  @∑µªÿ÷µ
- *      ≤ªø…”√
+ *  @ËøîÂõûÂÄº
+ *      ‰∏çÂèØÁî®
  */
 void MmwDemo_sleep(void)
 {
-    //¥ÌŒÛµ»¥˝÷–∂œ÷∏¡Ó
+    //ÈîôËØØÁ≠âÂæÖ‰∏≠Êñ≠Êåá‰ª§
     asm(" WFI ");
 }
 
 /**
- *  @b √Ë ˆ
+ *  @b ÊèèËø∞
  *  @n
- *      mmWave demo—› æ »Îø⁄
+ *      mmWave demoÊºîÁ§∫ ÂÖ•Âè£
  *
- *  @∑µªÿ≤Œ ˝
- *      ≤ªø…”√
+ *  @ËøîÂõûÂèÇÊï∞
+ *      ‰∏çÂèØÁî®
  */
 int main (void)
 {
@@ -1931,16 +1312,16 @@ int main (void)
     SOC_Handle      socHandle;
     SOC_Cfg         socCfg;
 
-    //≥ı ºªØESM
+    //ÂàùÂßãÂåñESM
     ESM_init(0U);
 
-    //≥ı ºªØSOC≈‰÷√
+    //ÂàùÂßãÂåñSOCÈÖçÁΩÆ
     memset ((void *)&socCfg, 0, sizeof(SOC_Cfg));
 
-    //∑‚◊∞SOC≈‰÷√
+    //Â∞ÅË£ÖSOCÈÖçÁΩÆ
     socCfg.clockCfg = SOC_SysClock_INIT;
 
-    //≥ı ºªØSOCƒ£øÈ°£”¶”√ø™ º ±º¥÷¥––£¨“‘»∑±£MPU’˝»∑≈‰÷√
+    //ÂàùÂßãÂåñSOCÊ®°Âùó„ÄÇÂ∫îÁî®ÂºÄÂßãÊó∂Âç≥ÊâßË°åÔºå‰ª•Á°Æ‰øùMPUÊ≠£Á°ÆÈÖçÁΩÆ
     socHandle = SOC_init (&socCfg, &errCode);
     if (socHandle == NULL)
     {
@@ -1949,21 +1330,21 @@ int main (void)
         return -1;
     }
 
-    //≥ı ºªØ°¢≈‰÷√demo MCB
+    //ÂàùÂßãÂåñ„ÄÅÈÖçÁΩÆdemo MCB
     memset ((void*)&gMmwMCB, 0, sizeof(MmwDemo_MCB));
 
     gMmwMCB.socHandle = socHandle;
 
-    //≥ı ºªØdemo≈‰÷√
+    //ÂàùÂßãÂåñdemoÈÖçÁΩÆ
     gMmwMCB.cfg.sysClockFrequency = (200 * 1000000);
     gMmwMCB.cfg.loggingBaudRate   = 921600;
     gMmwMCB.cfg.commandBaudRate   = 115200;
 
-    //ƒ¨»œGUIº‡ ”∆˜—°‘Ò
+    //ÈªòËÆ§GUIÁõëËßÜÂô®ÈÄâÊã©
     gMmwMCB.cliCfg.guiMonSel.detectedObjects = 1;
     gMmwMCB.cliCfg.guiMonSel.logMagRange = 1;
 
-    //ƒ¨»œCFAR≈‰÷√
+    //ÈªòËÆ§CFARÈÖçÁΩÆ
     gMmwMCB.cliCfg.cfarCfg.averageMode = HWA_NOISE_AVG_MODE_CFAR_CASO;
     gMmwMCB.cliCfg.cfarCfg.cyclicMode = HWA_FEATURE_BIT_DISABLE;
     gMmwMCB.cliCfg.cfarCfg.guardLen = MMW_HWA_CFAR_GUARD_LEN;
@@ -1974,17 +1355,17 @@ int main (void)
     gMmwMCB.cliCfg.peakGroupingCfg.inRangeDirectionEn = MMW_HWA_CFAR_PEAK_GROUPING;
 
 #if 0
-    //debug–≈œ¢
+    //debug‰ø°ÊÅØ
     System_printf ("**********************************************\n");
     System_printf ("Debug: Launching the Millimeter Wave Demo\n");
     System_printf ("**********************************************\n");
 #endif
 
-    //≥ı ºªØTask Parameters
+    //ÂàùÂßãÂåñTask Parameters
     Task_Params_init(&taskParams);
     Task_create(MmwDemo_initTask, &taskParams, NULL);
 
-    //∆Ù∂Øbios
+    //ÂêØÂä®bios
     BIOS_start();
     return 0;
 }
