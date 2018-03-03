@@ -678,15 +678,15 @@ extern mmwHwaBuf_t gMmwHwaMemBuf[MMW_HWA_NUM_MEM_BUFS];
 extern uint32_t log2Approx(uint32_t x);
 
 /*! L3 RAM buffer */
-uint8_t gMmwL3[SOC_XWR14XX_MSS_L3RAM_SIZE];
-#pragma DATA_SECTION(gMmwL3, ".l3ram");
+uint8_t gMmwL3[SOC_XWR14XX_MSS_L3RAM_SIZE];               //8位整形数组，长度为L3RAM_SIZE
+#pragma DATA_SECTION(gMmwL3, ".l3ram");                                //?
 
 /*! L3 heap for convenience of partitioning L3 RAM */
-MmwDemoMemPool_t gMmwL3heap =
+MmwDemoMemPool_t gMmwL3heap =                                  //结构体，分别为8位指针，32位整形，32位整形
 {
     &gMmwL3[0],
     SOC_XWR14XX_MSS_L3RAM_SIZE,
-    0
+    0                                                    //indx = 0
 };
 
 /**************************************************************************
@@ -697,7 +697,7 @@ MmwDemoMemPool_t gMmwL3heap =
  * @brief
  *  Global Variable for tracking information required by the mmw Demo
  */
-MmwDemo_MCB    gMmwMCB;
+MmwDemo_MCB    gMmwMCB;             //结构体，存储毫米波演示相关信息
 
 
 /**************************************************************************
@@ -710,17 +710,17 @@ extern void MmwDemo_CLIInit (void);
  ************************* Millimeter Wave Demo Functions **********************
  **************************************************************************/
 
-void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1);
+void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1);            //关联debug
 
 void MmwDemo_dataPathInit(MmwDemo_DataPathObj *obj);
 void MmwDemo_dataPathConfig(void);
 void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj);
 
 void MmwDemo_getAngleBinsAtPeak(uint32_t numObj,
-                                     MmwDemo_detectedObj *objOut,
+                                     MmwDemo_detectedObj *objOut,           //范围指数，多普勒指数，峰值，角度x，y，z
                                      uint16_t *pAngleBins);
 
-void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
+void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,          //通过UART传输检测数据
                                     MmwDemo_DataPathObj *obj);
 
 void MmwDemo_initTask(UArg arg0, UArg arg1);
@@ -735,7 +735,7 @@ void MmwDemo_sleep(void);
  *  @n
  *      Send assert information through CLI.
  */
-void _MmwDemo_debugAssert(int32_t expression, const char *file, int32_t line)
+void _MmwDemo_debugAssert(int32_t expression, const char *file, int32_t line)     //expression为0时执行
 {
     if (!expression) {
         CLI_write ("Exception: %s, line %d.\n",file,line);
@@ -747,7 +747,7 @@ void _MmwDemo_debugAssert(int32_t expression, const char *file, int32_t line)
  *  @n
  *      Get a handle for ADCBuf.
  */
-void MmwDemo_ADCBufOpen(MmwDemo_DataPathObj *obj)
+void MmwDemo_ADCBufOpen(MmwDemo_DataPathObj *obj)                  //ADC缓冲器
 {
     ADCBuf_Params       ADCBufparams;
     /*****************************************************************************
@@ -772,9 +772,9 @@ void MmwDemo_ADCBufOpen(MmwDemo_DataPathObj *obj)
 
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      Configures ADCBuf and returns the number of RxAntennas
+ *      配置ADC缓冲器，返回Rx天线数量
  */
 int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
 {
@@ -782,10 +782,10 @@ int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
     ADCBuf_dataFormat   dataFormat;
     ADCBuf_RxChanConf   rxChanConf;
     uint8_t             channel;
-    int32_t             retVal = 0;
+    int32_t             retVal = 0;                    //返回值
     uint8_t             numBytePerSample = 0;
     MmwDemo_ADCBufCfg*  ptrAdcbufCfg;
-    uint32_t            chirpThreshold;
+    uint32_t            chirpThreshold;               //啁啾入口
     uint32_t            rxChanMask = 0xF;
 
     ptrAdcbufCfg = &dataPathObj->cliCfg->adcBufCfg;
@@ -831,12 +831,12 @@ int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
 
     memset((void*)&rxChanConf, 0, sizeof(ADCBuf_RxChanConf));
 
-    /* Enable Rx Channel indicated in channel configuration */
+    /* 启用通道配置中指示的Rx通道 */
     for (channel = 0; channel < SYS_COMMON_NUM_RX_CHANNEL; channel++)
     {
         if(gMmwMCB.cfg.openCfg.chCfg.rxChannelEn & (0x1<<channel))
         {
-            /* Populate the receive channel configuration: */
+            /* 填充接收通道配置: */
             rxChanConf.channel = channel;
             retVal = ADCBuf_control(dataPathObj->adcbufHandle, ADCBufMMWave_CMD_CHANNEL_ENABLE, (void *)&rxChanConf);
             if (retVal < 0)
@@ -850,7 +850,7 @@ int32_t MmwDemo_ADCBufConfig(MmwDemo_DataPathObj *dataPathObj)
 
     chirpThreshold = ptrAdcbufCfg->chirpThreshold;
 
-    /* Set the chirp threshold: */
+    /* 设置啁啾阈值: */
     retVal = ADCBuf_control(dataPathObj->adcbufHandle, ADCBufMMWave_CMD_SET_CHIRP_THRESHHOLD,
                             (void *)&chirpThreshold);
     if(retVal < 0)
@@ -864,10 +864,9 @@ exit:
 
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      parses Profile, Chirp and Frame config and extracts parameters
- *      needed for processing chain configuration
+ *      解析Profile，Chirp和Frame配置并提取处理链配置所需的参数
  */
 bool MmwDemo_parseProfileAndChirpConfig(MmwDemo_DataPathObj *dataPathObj)
 {
@@ -1100,7 +1099,7 @@ bool MmwDemo_parseProfileAndChirpConfig(MmwDemo_DataPathObj *dataPathObj)
 
 void MmwDemo_measurementResultOutput(MmwDemo_DataPathObj *obj)
 {
-    /* Send the received DSS calibration info through CLI */
+    /* 通过CLI发送收到的DSS校准信息 */
     CLI_write ("compRangeBiasAndRxChanPhase");
     CLI_write (" %.7f", obj->cliCommonCfg->compRxChanCfg.rangeBias);
     int32_t i;
@@ -1113,9 +1112,9 @@ void MmwDemo_measurementResultOutput(MmwDemo_DataPathObj *obj)
 
 }
 
-/** @brief Transmits detection data over UART
+/** @概述 通过UART传送检测数据
 *
-*    The following data is transmitted:
+*    下列数据被传输:
 *    1. Header (size = 32bytes), including "Magic word", (size = 8 bytes)
 *       and icluding the number of TLV items
 *    TLV Items:
@@ -1149,12 +1148,12 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
 
     MmwDemo_output_message_tl   tl[MMWDEMO_OUTPUT_MSG_MAX];
 
-    /* Get Gui Monitor configuration */
+    /*获取GUI监视器数据 */
     pGuiMonSel = &gMmwMCB.cliCfg.guiMonSel;
 
-    /* Clear message header */
+    /*清楚信息帧头*/
     memset((void *)&header, 0, sizeof(MmwDemo_output_message_header));
-    /* Header: */
+    /* 帧头: */
     header.platform = 0xA1443;
     header.magicWord[0] = 0x0102;
     header.magicWord[1] = 0x0304;
@@ -1212,7 +1211,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
     }
 
     header.numTLVs = tlvIdx;
-    /* Round up packet length to multiple of MMWDEMO_OUTPUT_MSG_SEGMENT_LEN */
+    /* 整理数据包长度为MMWDEMO_OUTPUT_MSG_SEGMENT_LEN倍 */
     header.totalPacketLen = MMWDEMO_OUTPUT_MSG_SEGMENT_LEN *
             ((packetLen + (MMWDEMO_OUTPUT_MSG_SEGMENT_LEN-1))/MMWDEMO_OUTPUT_MSG_SEGMENT_LEN);
     header.timeCpuCycles =  Pmu_getCount(0);
@@ -1224,7 +1223,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
                        sizeof(MmwDemo_output_message_header));
 
     tlvIdx = 0;
-    /* Send detected Objects */
+    /* 发送检测对象 */
     if ((pGuiMonSel->detectedObjects == 1) && (obj->numObjOut > 0))
     {
         MmwDemo_output_message_dataObjDescr descr;
@@ -1232,17 +1231,17 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         UART_writePolling (uartHandle,
                            (uint8_t*)&tl[tlvIdx],
                            sizeof(MmwDemo_output_message_tl));
-        /* Send objects descriptor */
+        /* 发送对象描述符 */
         descr.numDetetedObj = (uint16_t) obj->numObjOut;
         descr.xyzQFormat = (uint16_t) obj->xyzOutputQFormat;
         UART_writePolling (uartHandle, (uint8_t*)&descr, sizeof(MmwDemo_output_message_dataObjDescr));
 
-        /*Send array of objects */
+        /*发送对象数组 */
         UART_writePolling (uartHandle, (uint8_t*)obj->objOut, sizeof(MmwDemo_detectedObj) * obj->numObjOut);
         tlvIdx++;
     }
 
-    /* Send Range profile */
+    /* 发送范围配置文件 */
     if (pGuiMonSel->logMagRange)
     {
         UART_writePolling (uartHandle,
@@ -1258,7 +1257,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* Send noise profile */
+    /* 发送噪音配置文件 */
     if (pGuiMonSel->noiseProfile)
     {
         uint32_t maxDopIdx = obj->numDopplerBins/2 -1;
@@ -1275,7 +1274,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* Send data for static azimuth heatmap */
+    /* 发送静态方位热图的数据 */
     if (pGuiMonSel->rangeAzimuthHeatMap)
     {
         uint32_t skip = obj->numChirpsPerFrame * obj->numRxAntennas;
@@ -1294,7 +1293,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* Send data for range/Doppler heatmap */
+    /* 发送范围/多普勒热图的数据 */
     if (pGuiMonSel->rangeDopplerHeatMap == 1)
     {
         UART_writePolling (uartHandle,
@@ -1306,11 +1305,11 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* Send stats information */
+    /* 发送统计信息 */
     if (pGuiMonSel->statsInfo == 1)
     {
         MmwDemo_output_message_stats stats;
-        stats.interChirpProcessingMargin = 0; /* Not applicable */
+        stats.interChirpProcessingMargin = 0; /* 不可用 */
         stats.interFrameProcessingMargin = (uint32_t) (obj->timingInfo.interFrameProcessingEndMargin/R4F_CLOCK_MHZ); /* In micro seconds */
         stats.interFrameProcessingTime = (uint32_t) (obj->timingInfo.interFrameProcCycles/R4F_CLOCK_MHZ); /* In micro seconds */
         stats.transmitOutputTime = (uint32_t) (obj->timingInfo.transmitOutputCycles/R4F_CLOCK_MHZ); /* In micro seconds */
@@ -1326,7 +1325,7 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
 
-    /* Send padding bytes */
+    /* 发送填充字节 */
     numPaddingBytes = MMWDEMO_OUTPUT_MSG_SEGMENT_LEN - (packetLen & (MMWDEMO_OUTPUT_MSG_SEGMENT_LEN-1));
     if (numPaddingBytes<MMWDEMO_OUTPUT_MSG_SEGMENT_LEN)
     {
@@ -1337,35 +1336,35 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      The function is used to trigger the Front end to start generating chirps.
+ *      这个函数用来引发雷达前端产生啁啾。
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *      不可用.
  */
 int32_t MmwDemo_dataPathStart (void)
 {
-    MMWave_CalibrationCfg   calibrationCfg;
+    MMWave_CalibrationCfg   calibrationCfg;           //校准
     int32_t                 errCode = 0;
     MmwDemo_DataPathObj *dataPathObj = &gMmwMCB.dataPathObj;
 
     dataPathObj->frameStartIntCounter = 0;
     dataPathObj->interFrameProcToken = 0;
 
-    /* Initialize the calibration configuration: */
+    /* 初始化校准配置: */
     memset ((void *)&calibrationCfg, 0, sizeof(MMWave_CalibrationCfg));
 
-    /* Populate the calibration configuration: */
+    /* 配置校准数据: */
     calibrationCfg.dfeDataOutputMode = MMWave_DFEDataOutputMode_FRAME;
     calibrationCfg.u.chirpCalibrationCfg.enableCalibration    = true;
     calibrationCfg.u.chirpCalibrationCfg.enablePeriodicity    = true;
     calibrationCfg.u.chirpCalibrationCfg.periodicTimeInFrames = 10U;
 
-    /* Start the mmWave module: The configuration has been applied successfully. */
+    /* 启动mmWave模块: 配置已成功应用. */
     if (MMWave_start (gMmwMCB.ctrlHandle, &calibrationCfg, &errCode) < 0)
     {
-        /* Error: Unable to start the mmWave control */
+        /*错误: 无法启动mmWave控制 */
         //System_printf ("Error: mmWave Control Start failed [Error code %d]\n", errCode);
         MmwDemo_debugAssert (0);
     }
@@ -1373,14 +1372,13 @@ int32_t MmwDemo_dataPathStart (void)
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      The function is used to configure the data path based on the chirp profile.
- *      After this function is executed, the data path processing will ready to go
- *      when the ADC buffer starts receiving samples corresponding to the chirps.
+ *      这个函数被用来基于啁啾数据配置data path
+ *      该函数执行之后，当ADC缓冲器开始收集与啁啾一致的样例时，data path过程将准备执行。
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *      不可用.
  */
 void MmwDemo_dataPathConfig (void)
 {
@@ -1410,39 +1408,39 @@ void MmwDemo_dataPathConfig (void)
     }
     else
     {
-        /* no valid profile found - assert! */
+        /* 没有找到有效profile - assert! */
         MmwDemo_debugAssert(0);
     }
     return;
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *  This function is called at the init time from @ref MmwDemo_initTask.
- *  It initializes drivers: ADCBUF, HWA, EDMA, and semaphores used
- *  by  @ref MmwDemo_dataPathTask
- *  @retval
- *      Not Applicable.
+ *  这个函数在初始化时，被@ref MmwDemo_initTask调用。
+ *  它初始化这些驱动: ADCBUF, HWA, EDMA, 并且被@ref MmwDemo_dataPathTask用来传输信号。
+ *
+ *  @返回值
+ *      不可用.
  */
-void MmwDemo_dataPathInit(MmwDemo_DataPathObj *obj)
+void MmwDemo_dataPathInit(MmwDemo_DataPathObj *obj)                         //ADC,HWA,EDMA
 {
     MmwDemo_dataPathObjInit(obj, &gMmwMCB.cliCfg, &gMmwMCB.cliCommonCfg);
 
-    /* Initialize the ADCBUF */
+    /* 初始化 ADCBUF */
     ADCBuf_init();
 
-    /* Initialize HWA */
+    /* 初始化 HWA */
     MmwDemo_hwaInit(obj);
 
-    /* Initialize EDMA */
+    /* 初始化 EDMA */
     MmwDemo_edmaInit(obj);
 }
 
-void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj)
+void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj)                 //打开
 {
     /*****************************************************************************
-     * Start HWA, EDMA and ADCBUF drivers:
+     * 启动 HWA, EDMA 和 ADCBUF drivers:
      *****************************************************************************/
     MmwDemo_hwaOpen(obj, gMmwMCB.socHandle);
     MmwDemo_edmaOpen(obj);
@@ -1451,21 +1449,20 @@ void MmwDemo_dataPathOpen(MmwDemo_DataPathObj *obj)
 
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      The task is used to provide an execution context for the mmWave
- *      control task
+ *      这个任务用来为mmWave控制进程提供执行环境。
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *      不可用.
  */
 void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1)
 {
-    int32_t errCode;
+    int32_t errCode;       //错误代码
 
     while (1)
     {
-        /* Execute the mmWave control module: */
+        /* 执行mmWave控制模块: */
         if (MMWave_execute (gMmwMCB.ctrlHandle, &errCode) < 0)
         {
             //System_printf ("Error: mmWave control execution failed [Error code %d]\n", errCode);
@@ -1475,33 +1472,32 @@ void MmwDemo_mmWaveCtrlTask(UArg arg0, UArg arg1)
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      Registered event function to mmwave which is invoked when an event from the
- *      BSS is received.
+ *      为mmWave声明事件函数，该函数当接收到从BSS传来的事件时被调用。
  *
- *  @param[in]  msgId
+ *  @内部参数  msgId
  *      Message Identifier
- *  @param[in]  sbId
+ *  @内部参数  sbId
  *      Subblock identifier
- *  @param[in]  sbLen
+ *  @内部参数  sbLen
  *      Length of the subblock
- *  @param[in]  payload
+ *  @内部参数  payload
  *      Pointer to the payload buffer
  *
- *  @retval
- *      Always return 0
+ *  @返回值
+ *      总是return 0.
  */
 int32_t MmwDemo_eventCallbackFxn(uint16_t msgId, uint16_t sbId, uint16_t sbLen, uint8_t *payload)
 {
     uint16_t asyncSB = RL_GET_SBID_FROM_UNIQ_SBID(sbId);
 
-    /* Process the received message: */
+    /* 处理接收到的信息: */
     switch (msgId)
     {
         case RL_RF_ASYNC_EVENT_MSG:
         {
-            /* Received Asychronous Message: */
+            /* 接受异步信息: */
             switch (asyncSB)
             {
                 case RL_RF_AE_CPUFAULT_SB:
@@ -1544,8 +1540,8 @@ int32_t MmwDemo_eventCallbackFxn(uint16_t msgId, uint16_t sbId, uint16_t sbLen, 
                 }
                 case RL_RF_AE_FRAME_END_SB:
                 {
-                    /*Received Frame Stop async event from BSS.
-                      No action required.*/
+                    /*从BSS接受帧停止异步事件
+                                                          不需要任何动作.*/
                     break;
                 }
                 default:
@@ -1566,29 +1562,28 @@ int32_t MmwDemo_eventCallbackFxn(uint16_t msgId, uint16_t sbId, uint16_t sbLen, 
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      The task is used for data path processing and to transmit the
- *      detected objects through the UART output port.
+ *      该任务用来对data path进行处理，并且通过UART输出口传输检测对象。
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *      不可用。
  */
 void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
 {
     MmwDemo_DataPathObj *dataPathObj = &gMmwMCB.dataPathObj;
     uint16_t numDetectedObjects;
     uint32_t startTime, transmitOutStartTime;
-    uint32_t txOrder[SYS_COMMON_NUM_TX_ANTENNAS] = {0,2,1};
+    uint32_t txOrder[SYS_COMMON_NUM_TX_ANTENNAS] = {0,2,1};                 //天线顺序
     while(1)
     {
-        Semaphore_pend(dataPathObj->frameStart_semHandle, BIOS_WAIT_FOREVER);
+        Semaphore_pend(dataPathObj->frameStart_semHandle, BIOS_WAIT_FOREVER);   //发出信号
 
         Load_update();
         dataPathObj->timingInfo.interFrameCPULoad=Load_getCPULoad();
 
         MmwDemo_dataPathWait1D(dataPathObj);
-        /* 1st Dimension FFT done! */
+        /* 一维FFT完成 */
 
         Load_update();
         dataPathObj->timingInfo.activeFrameCPULoad=Load_getCPULoad();
@@ -1607,8 +1602,7 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
                  MmwDemo_dcRangeSignatureCompensation(dataPathObj);
              }
         }
-
-        /* Clutter removal */
+           /*去除杂波 */
         if (dataPathObj->cliCfg->clutterRemovalCfg.enabled)
         {
             int32_t rngIdx, antIdx, dopIdx;
@@ -1642,16 +1636,16 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
         }
 
         MmwDemo_process2D(dataPathObj);
-        /* 2nd Dimension FFT done! */
+        /* 二维FFT完成 */
 
-        /* Procedure for range bias measurement and Rx channels gain/phase offset measurement */
+        /* 范围偏差测量和Rx通道增益/相位偏移测量的程序 */
         if(dataPathObj->cliCommonCfg->measureRxChanCfg.enabled)
         {
             MmwDemo_rangeBiasRxChPhaseMeasure(
                     dataPathObj->cliCommonCfg->measureRxChanCfg.targetDistance,
-                    dataPathObj->rangeResolution,
+                    dataPathObj->rangeResolution,           //范围分辨率
                     dataPathObj->cliCommonCfg->measureRxChanCfg.searchWinSize,
-                    dataPathObj->rangeDopplerLogMagMatrix,
+                    dataPathObj->rangeDopplerLogMagMatrix, //范围多普勒矩阵
                     dataPathObj->numDopplerBins,
                     dataPathObj->numVirtualAntennas,
                     dataPathObj->numVirtualAntennas * dataPathObj->numDopplerBins,
@@ -1664,19 +1658,19 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
         }
 
         MmwDemo_processCfar(dataPathObj, &numDetectedObjects);
-        /* CFAR done! */
+        /* CFAR完成*/
 
-        /* Postprocessing/angle estimation */
+        /* 预处理/角度估计 */
         dataPathObj->numHwaCfarDetections = numDetectedObjects;
         MmwDemo_processAngle(dataPathObj);
 
-        /* Calculate noise floor. This is for EVM diagnostics only. Assumes a stationary scene */
+        /* 计算噪音等级. 只用于EVM诊断。假定场景固定不变。 */
         dataPathObj->noiseEnergy = calcNoiseFloor (dataPathObj->radarCube, dataPathObj->numDopplerBins,
                 dataPathObj->numRangeBins, dataPathObj->numVirtualAntennas);
 
         transmitOutStartTime = Pmu_getCount(0);
 
-        /* Sending range bias and Rx channel phase offset measurements to MSS and from there to CLI */
+        /* 将范围偏差测量和Rx通道增益测量值传给MSS以及传给Cli*/
          if(dataPathObj->cliCommonCfg->measureRxChanCfg.enabled)
          {
              MmwDemo_measurementResultOutput (dataPathObj);
@@ -1687,12 +1681,12 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
 
         dataPathObj->timingInfo.transmitOutputCycles = Pmu_getCount(0) - transmitOutStartTime;
 
-        /* Prepare for next frame */
+        /* 为下一帧做准备*/
         MmwDemo_config1D_HWA(dataPathObj);
         MmwDemo_dataPathTrigger1D(dataPathObj);
 
-        /* Processing cycles for 2D, CFAR, Azimuth/Elevation
-           processing excluding sending out data */
+        /* 处理 2D, CFAR, 方位角/仰角 周期
+                               处理    excluding sending out data */
         dataPathObj->timingInfo.interFrameProcessingEndTime = Pmu_getCount(0);
         dataPathObj->timingInfo.interFrameProcCycles = dataPathObj->timingInfo.interFrameProcessingEndTime - startTime -
             dataPathObj->timingInfo.transmitOutputCycles;
@@ -1704,25 +1698,25 @@ void MmwDemo_dataPathTask(UArg arg0, UArg arg1)
 
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      Frame start interrupt handler
+ *      帧起始中断处理程序
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *      不可用。
  */
 static void MmwDemo_frameStartIntHandler(uintptr_t arg)
 {
     MmwDemo_DataPathObj * dpObj = &gMmwMCB.dataPathObj;
 
-    /* Increment interrupt counter for debugging purpose */
+    /* 增量中断计数器（目的为debug）*/
     dpObj->frameStartIntCounter++;
 
-    /* Note: this is valid after the first frame */
+    /* 注意: 第一帧后有效 */
     dpObj->timingInfo.interFrameProcessingEndMargin =
             Pmu_getCount(0) - dpObj->timingInfo.interFrameProcessingEndTime;
 
-    /* Check if previous chirp processing has completed */
+    /* 检查上一个啁啾处理是否完成 */
     MmwDemo_debugAssert(dpObj->interFrameProcToken == 0);
     dpObj->interFrameProcToken++;
 
@@ -1732,57 +1726,56 @@ static void MmwDemo_frameStartIntHandler(uintptr_t arg)
 
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      System Initialization Task which initializes the various
- *      components in the system.
+ *      系统初始化任务，初始化 系统中各个部分。
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *     不可用.
  */
-void MmwDemo_initTask(UArg arg0, UArg arg1)
+void MmwDemo_initTask(UArg arg0, UArg arg1)                 //初始化
 {
     int32_t             errCode;
     MMWave_InitCfg      initCfg;
     UART_Params         uartParams;
     Task_Params         taskParams;
 
-    /* Debug Message: */
+    /* debug信息: */
     System_printf("Debug: Launched the Initialization Task\n");
 
     /*****************************************************************************
-     * Initialize the mmWave SDK components:
+     *初始化mmWave SDK components:
      *****************************************************************************/
 
-    /* Initialize the UART */
+    /* 初始化the UART */
     UART_init();
 
-    /* Initialize the Mailbox */
+    /* 初始化Mailbox */
     Mailbox_init(MAILBOX_TYPE_MSS);
 
-    /* Initialize the GPIO */
+    /*初始化GPIO */
     GPIO_init ();
 
-    /* Initialize the Data Path: */
+    /* 初始化Data Path: */
     MmwDemo_dataPathInit(&gMmwMCB.dataPathObj);
 
     /*****************************************************************************
-     * Open & configure the drivers:
+     * 打开&配置驱动:
      *****************************************************************************/
 
-    /* Setup the PINMUX to bring out the UART-1 */
+    /* 配置PINMUX工具来打开UART-1 */
     Pinmux_Set_OverrideCtrl(SOC_XWR14XX_PINN6_PADBE, PINMUX_OUTEN_RETAIN_HW_CTRL, PINMUX_INPEN_RETAIN_HW_CTRL);
     Pinmux_Set_FuncSel(SOC_XWR14XX_PINN6_PADBE, SOC_XWR14XX_PINN6_PADBE_MSS_UARTA_TX);
     Pinmux_Set_OverrideCtrl(SOC_XWR14XX_PINN5_PADBD, PINMUX_OUTEN_RETAIN_HW_CTRL, PINMUX_INPEN_RETAIN_HW_CTRL);
     Pinmux_Set_FuncSel(SOC_XWR14XX_PINN5_PADBD, SOC_XWR14XX_PINN5_PADBD_MSS_UARTA_RX);
 
-    /* Setup the default UART Parameters */
+    /* 配置默认UART参数 */
     UART_Params_init(&uartParams);
     uartParams.clockFrequency = gMmwMCB.cfg.sysClockFrequency;
     uartParams.baudRate       = gMmwMCB.cfg.commandBaudRate;
     uartParams.isPinMuxDone   = 1;
 
-    /* Open the UART Instance */
+    /* 打开UART实例 */
     gMmwMCB.commandUartHandle = UART_open(0, &uartParams);
     if (gMmwMCB.commandUartHandle == NULL)
     {
@@ -1792,7 +1785,7 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
     }
     //System_printf("Debug: UART Instance %p has been opened successfully\n", gMmwMCB.commandUartHandle);
 
-    /* Setup the default UART Parameters */
+    /* 配置默认UART参数 */
     UART_Params_init(&uartParams);
     uartParams.writeDataMode = UART_DATA_BINARY;
     uartParams.readDataMode = UART_DATA_BINARY;
@@ -1811,13 +1804,13 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
     //System_printf("Debug: UART Instance %p has been opened successfully\n", gMmwMCB.loggingUartHandle);
 
     /*****************************************************************************
-     * mmWave: Initialization of the high level module
+     * mmWave: 高级模块初始化
      *****************************************************************************/
 
-    /* Initialize the mmWave control init configuration */
+    /* 初始化mmWave初始化配置 */
     memset ((void*)&initCfg, 0 , sizeof(MMWave_InitCfg));
 
-    /* Populate the init configuration: */
+    /* 填入初始化配置: */
     initCfg.domain                  = MMWave_Domain_MSS;
     initCfg.socHandle               = gMmwMCB.socHandle;
     initCfg.eventFxn                = MmwDemo_eventCallbackFxn;
@@ -1825,22 +1818,22 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
     initCfg.linkCRCCfg.crcChannel   = CRC_Channel_CH1;
     initCfg.cfgMode                 = MMWave_ConfigurationMode_FULL;
 
-    /* Initialize and setup the mmWave Control module */
+    /* 初始化、设置mmWave控制模块 */
     gMmwMCB.ctrlHandle = MMWave_init (&initCfg, &errCode);
     if (gMmwMCB.ctrlHandle == NULL)
     {
-        /* Error: Unable to initialize the mmWave control module */
+        /* 错误：无法初始化mmWave 控制模块 */
         //System_printf ("Error: mmWave Control Initialization failed [Error code %d]\n", errCode);
         MmwDemo_debugAssert (0);
         return;
     }
     //System_printf ("Debug: mmWave Control Initialization was successful\n");
 
-    /* Synchronization: This will synchronize the execution of the control module
-     * between the domains. This is a prerequiste and always needs to be invoked. */
+    /* 同步:这将同步不同区域之间控制模块的执行。
+     * 这是一个前提，并且总是需要被调用。*/
     if (MMWave_sync (gMmwMCB.ctrlHandle, &errCode) < 0)
     {
-        /* Error: Unable to synchronize the mmWave control module */
+        /* 错误：无法同步mmWave control模块 */
         //System_printf ("Error: mmWave Control Synchronization failed [Error code %d]\n", errCode);
         MmwDemo_debugAssert (0);
         return;
@@ -1849,14 +1842,13 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
 
     MmwDemo_dataPathOpen(&gMmwMCB.dataPathObj);
 
-    /* Configure banchmark counter */
+    /* 配置基准计数器 */
     Pmu_configureCounter(0, 0x11, FALSE);
     Pmu_startCounter(0);
 
     /*****************************************************************************
-     * Launch the mmWave control execution task
-     * - This should have a higher priroity than any other task which uses the
-     *   mmWave control API
+     * 启动mmWave control执行任务
+     * - 此任务用到了mmWave control API,应该比其他任务优先级更高
      *****************************************************************************/
     Task_Params_init(&taskParams);
     taskParams.priority  = 5;
@@ -1864,24 +1856,24 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
     Task_create(MmwDemo_mmWaveCtrlTask, &taskParams, NULL);
 
     /*****************************************************************************
-     * Initialize the CLI Module:
+     * 初始化命令行界面模块
      *****************************************************************************/
     MmwDemo_CLIInit();
 
     /*****************************************************************************
-     * Initialize the Sensor Management Module:
+     * 初始化传感器管理模块
      *****************************************************************************/
     if (MmwDemo_sensorMgmtInit() < 0)
         return;
 
-    /* Register Frame start interrupt handler */
+    //寄存器帧启动中断处理
     {
         SOC_SysIntListenerCfg  socIntCfg;
         int32_t errCode;
 
         Semaphore_Params       semParams;
 
-        /* Register frame start interrupt listener */
+        //寄存器帧启动中断监听
         socIntCfg.systemInterrupt  = SOC_XWR14XX_DSS_FRAME_START_IRQ;
         socIntCfg.listenerFxn      = MmwDemo_frameStartIntHandler;
         socIntCfg.arg              = (uintptr_t)NULL;
@@ -1898,8 +1890,7 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
     }
 
     /*****************************************************************************
-     * Launch the Main task
-     * - The main demo task
+     * 启动main任务
      *****************************************************************************/
     Task_Params_init(&taskParams);
     taskParams.priority  = 4;
@@ -1910,29 +1901,28 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *     Function to sleep the R4F using WFI (Wait For Interrupt) instruction. 
- *     When R4F has no work left to do,
- *     the BIOS will be in Idle thread and will call this function. The R4F will
- *     wake-up on any interrupt (e.g chirp interrupt).
+ *      函数使用等待中断指令来休眠ARM Cortex-R4F内核。
+ *      当R4F内核没有工作任务时，bios将会处在空闲进程中，并且引用这个函数。
+ *      R4F将会被任意中断唤醒（例：啁啾中断）。
  *
- *  @retval
- *      Not Applicable.
+ *  @返回值
+ *      不可用
  */
 void MmwDemo_sleep(void)
 {
-    /* issue WFI (Wait For Interrupt) instruction */
+    //错误等待中断指令
     asm(" WFI ");
 }
 
 /**
- *  @b Description
+ *  @b 描述
  *  @n
- *      Entry point into the Millimeter Wave Demo
+ *      mmWave demo演示 入口
  *
- *  @retval
- *      Not Applicable.
+ *  @返回参数
+ *      不可用
  */
 int main (void)
 {
@@ -1941,17 +1931,16 @@ int main (void)
     SOC_Handle      socHandle;
     SOC_Cfg         socCfg;
 
-    /* Initialize the ESM: Dont clear errors as TI RTOS does it */
+    //初始化ESM
     ESM_init(0U);
 
-    /* Initialize the SOC confiugration: */
+    //初始化SOC配置
     memset ((void *)&socCfg, 0, sizeof(SOC_Cfg));
 
-    /* Populate the SOC configuration: */
+    //封装SOC配置
     socCfg.clockCfg = SOC_SysClock_INIT;
 
-    /* Initialize the SOC Module: This is done as soon as the application is started
-     * to ensure that the MPU is correctly configured. */
+    //初始化SOC模块。应用开始时即执行，以确保MPU正确配置
     socHandle = SOC_init (&socCfg, &errCode);
     if (socHandle == NULL)
     {
@@ -1960,21 +1949,21 @@ int main (void)
         return -1;
     }
 
-    /* Initialize and populate the demo MCB */
+    //初始化、配置demo MCB
     memset ((void*)&gMmwMCB, 0, sizeof(MmwDemo_MCB));
 
     gMmwMCB.socHandle = socHandle;
 
-    /* Initialize the DEMO configuration: */
+    //初始化demo配置
     gMmwMCB.cfg.sysClockFrequency = (200 * 1000000);
     gMmwMCB.cfg.loggingBaudRate   = 921600;
     gMmwMCB.cfg.commandBaudRate   = 115200;
 
-    /* Default gui monitor selection */
+    //默认GUI监视器选择
     gMmwMCB.cliCfg.guiMonSel.detectedObjects = 1;
     gMmwMCB.cliCfg.guiMonSel.logMagRange = 1;
 
-    /* Default CFAR Configuration */
+    //默认CFAR配置
     gMmwMCB.cliCfg.cfarCfg.averageMode = HWA_NOISE_AVG_MODE_CFAR_CASO;
     gMmwMCB.cliCfg.cfarCfg.cyclicMode = HWA_FEATURE_BIT_DISABLE;
     gMmwMCB.cliCfg.cfarCfg.guardLen = MMW_HWA_CFAR_GUARD_LEN;
@@ -1985,17 +1974,17 @@ int main (void)
     gMmwMCB.cliCfg.peakGroupingCfg.inRangeDirectionEn = MMW_HWA_CFAR_PEAK_GROUPING;
 
 #if 0
-    /* Debug Message: */
+    //debug信息
     System_printf ("**********************************************\n");
     System_printf ("Debug: Launching the Millimeter Wave Demo\n");
     System_printf ("**********************************************\n");
 #endif
 
-    /* Initialize the Task Parameters. */
+    //初始化Task Parameters
     Task_Params_init(&taskParams);
     Task_create(MmwDemo_initTask, &taskParams, NULL);
 
-    /* Start BIOS */
+    //启动bios
     BIOS_start();
     return 0;
 }
